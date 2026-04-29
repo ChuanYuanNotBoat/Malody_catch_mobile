@@ -10,8 +10,18 @@ chart-editing behavior is expected to come from the sibling
 
 - Android-only Flutter project scaffold.
 - Initial Dart FFI binding in `lib/core/native_core.dart`.
-- The native shared library is not bundled yet; Android packaging will add
-  `libmalody_catch_core_ffi.so` after the core Android build is ready.
+- `CoreSession` wrapper and startup smoke page are available in
+  `lib/core/core_session.dart` and `lib/main.dart`.
+- Android `arm64-v8a` native library is bundled at
+  `android/app/src/main/jniLibs/arm64-v8a/libmalody_catch_core_ffi.so`.
+
+## Sync Native Library
+
+Use the local helper to rebuild and copy the sibling core `.so`:
+
+```powershell
+./tools/sync_core_android_so.ps1
+```
 
 ## Getting Started
 

@@ -15,21 +15,21 @@ Android 首版先完成移动端低延迟编辑闭环：
 - [x] 创建 Android-only Flutter 工程。
 - [x] 增加 `ffi` 依赖。
 - [x] 建立初始 Dart FFI 绑定：session、普通音符、snapshot、undo/redo。
-- [ ] 从 sibling core 仓库构建 Android `arm64-v8a` `.so`。
-- [ ] 将 `libmalody_catch_core_ffi.so` 放入 Android `jniLibs/arm64-v8a`。
-- [ ] 增加 debug 启动自检：加载 native library、create/destroy session。
-- [ ] 增加 FFI smoke test 页面或 debug action。
-- [ ] 为 FFI 绑定增加异常边界：library missing、ABI mismatch、null session。
-- [ ] 封装 `CoreSession` Dart class，隐藏裸指针生命周期。
+- [x] 从 sibling core 仓库构建 Android `arm64-v8a` `.so`。
+- [x] 将 `libmalody_catch_core_ffi.so` 放入 Android `jniLibs/arm64-v8a`。
+- [x] 增加 debug 启动自检：加载 native library、create/destroy session。
+- [x] 增加 FFI smoke test 页面或 debug action。
+- [x] 为 FFI 绑定增加异常边界：library missing、ABI mismatch、null session。
+- [x] 封装 `CoreSession` Dart class，隐藏裸指针生命周期。
 
 ## P1 - 移动端数据状态层
 
-- [ ] 建立 `ChartDocumentController`：持有 core session、当前文件路径、dirty 状态。
-- [ ] 建立 note snapshot 缓存，按 core revision 刷新。
-- [ ] 建立 selection state：单选、多选、清空、按 id 查询。
+- [x] 建立 `ChartDocumentController`：持有 core session、当前文件路径、dirty 状态。
+- [x] 建立 note snapshot 缓存，按 core revision 刷新。
+- [x] 建立 selection state：单选、多选、清空、按 id 查询。
 - [ ] 建立 editor mode：place normal、place rain、delete、select、move。
-- [ ] 建立 undo/redo state，同步按钮可用状态。
-- [ ] 建立错误展示通道：SnackBar/dialog/log panel。
+- [x] 建立 undo/redo state，同步按钮可用状态。
+- [x] 建立错误展示通道：先用页面 log/error 区域承载，后续再接 SnackBar/dialog。
 - [ ] 增加 autosave 草稿策略，避免移动端切后台丢数据。
 
 ## P2 - Canvas 与触摸交互

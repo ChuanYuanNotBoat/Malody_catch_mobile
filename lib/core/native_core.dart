@@ -3,6 +3,15 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+class NativeCoreException implements Exception {
+  const NativeCoreException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => 'NativeCoreException: $message';
+}
+
 final class MceSession extends Opaque {}
 
 final class MceBeat extends Struct {
@@ -103,19 +112,26 @@ typedef _SessionBoolNative = Int32 Function(Pointer<MceSession>);
 typedef _SessionBoolDart = int Function(Pointer<MceSession>);
 
 DynamicLibrary openMalodyCatchCoreLibrary() {
+  final String name;
   if (Platform.isAndroid) {
-    return DynamicLibrary.open('libmalody_catch_core_ffi.so');
+    name = 'libmalody_catch_core_ffi.so';
+  } else if (Platform.isWindows) {
+    name = 'malody_catch_core_ffi.dll';
+  } else if (Platform.isMacOS) {
+    name = 'libmalody_catch_core_ffi.dylib';
+  } else if (Platform.isLinux) {
+    name = 'libmalody_catch_core_ffi.so';
+  } else {
+    throw const NativeCoreException(
+      'Unsupported platform for Malody Catch core FFI.',
+    );
   }
-  if (Platform.isWindows) {
-    return DynamicLibrary.open('malody_catch_core_ffi.dll');
+
+  try {
+    return DynamicLibrary.open(name);
+  } catch (e) {
+    throw NativeCoreException('Failed to load native library "$name": $e');
   }
-  if (Platform.isMacOS) {
-    return DynamicLibrary.open('libmalody_catch_core_ffi.dylib');
-  }
-  if (Platform.isLinux) {
-    return DynamicLibrary.open('libmalody_catch_core_ffi.so');
-  }
-  throw UnsupportedError('Unsupported platform for Malody Catch core FFI.');
 }
 
 class NativeCoreBindings {
@@ -160,7 +176,14 @@ class NativeCoreBindings {
       );
 
   factory NativeCoreBindings.open() {
-    return NativeCoreBindings(openMalodyCatchCoreLibrary());
+    try {
+      return NativeCoreBindings(openMalodyCatchCoreLibrary());
+    } catch (e) {
+      if (e is NativeCoreException) {
+        rethrow;
+      }
+      throw NativeCoreException('Failed to create NativeCoreBindings: $e');
+    }
   }
 
   final _SessionCreateDart _create;
