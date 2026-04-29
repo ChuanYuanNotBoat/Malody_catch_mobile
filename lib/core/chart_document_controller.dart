@@ -48,6 +48,8 @@ class ChartDocumentController extends ChangeNotifier {
   final Set<String> _selectedNoteIds = <String>{};
   String _lastEventLog = '';
   String _lastError = '';
+  int _lastErrorCode = 0;
+  String _lastErrorName = 'none';
   int _noteIdSeed = 0;
   EditorMode _editorMode = EditorMode.select;
 
@@ -58,6 +60,8 @@ class ChartDocumentController extends ChangeNotifier {
   int get revision => _revision;
   String get lastEventLog => _lastEventLog;
   String get lastError => _lastError;
+  int get lastErrorCode => _lastErrorCode;
+  String get lastErrorName => _lastErrorName;
   bool get canUndo => _session?.canUndo ?? false;
   bool get canRedo => _session?.canRedo ?? false;
   EditorMode get editorMode => _editorMode;
@@ -91,6 +95,8 @@ class ChartDocumentController extends ChangeNotifier {
       _cachedNotes.clear();
       _selectedNoteIds.clear();
       _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
       _syncRevisionFromCore();
       _lastEventLog = 'session_opened';
     } catch (e) {
@@ -111,6 +117,8 @@ class ChartDocumentController extends ChangeNotifier {
     _cachedNotes.clear();
     _selectedNoteIds.clear();
     _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
     _lastEventLog = 'session_closed';
     notifyListeners();
   }
@@ -165,7 +173,7 @@ class ChartDocumentController extends ChangeNotifier {
       x: x,
     );
     if (!ok) {
-      _setFailure('add_note_failed', session.lastErrorDetails);
+      _setFailureFromSession('add_note_failed', session);
       return;
     }
 
@@ -187,7 +195,7 @@ class ChartDocumentController extends ChangeNotifier {
     final id = 'mobile-rain-$_noteIdSeed';
     final ok = session.addRainNote(id: id, beat: beat, endBeat: endBeat, x: x);
     if (!ok) {
-      _setFailure('add_rain_failed', session.lastErrorDetails);
+      _setFailureFromSession('add_rain_failed', session);
       return;
     }
 
@@ -222,7 +230,7 @@ class ChartDocumentController extends ChangeNotifier {
 
     final ok = session.moveRainNote(id: id, beat: beat, endBeat: endBeat, x: x);
     if (!ok) {
-      _setFailure('move_rain_failed', session.lastErrorDetails);
+      _setFailureFromSession('move_rain_failed', session);
       return;
     }
 
@@ -251,7 +259,7 @@ class ChartDocumentController extends ChangeNotifier {
       offsetMs: offsetMs,
     );
     if (!ok) {
-      _setFailure('add_sound_failed', session.lastErrorDetails);
+      _setFailureFromSession('add_sound_failed', session);
       return;
     }
 
@@ -267,7 +275,7 @@ class ChartDocumentController extends ChangeNotifier {
 
     final ok = session.removeNoteById(id);
     if (!ok) {
-      _setFailure('remove_note_failed', session.lastErrorDetails);
+      _setFailureFromSession('remove_note_failed', session);
       return;
     }
 
@@ -292,7 +300,7 @@ class ChartDocumentController extends ChangeNotifier {
     }
     final ok = session.undo();
     if (!ok) {
-      _setFailure('undo_failed', session.lastErrorDetails);
+      _setFailureFromSession('undo_failed', session);
       return;
     }
     _markChanged('undo_ok');
@@ -306,7 +314,7 @@ class ChartDocumentController extends ChangeNotifier {
     }
     final ok = session.redo();
     if (!ok) {
-      _setFailure('redo_failed', session.lastErrorDetails);
+      _setFailureFromSession('redo_failed', session);
       return;
     }
     _markChanged('redo_ok');
@@ -398,6 +406,8 @@ class ChartDocumentController extends ChangeNotifier {
       );
 
       _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
       _lastEventLog = 'draft_restored:$restored:$skipped';
       notifyListeners();
     } catch (e) {
@@ -448,13 +458,25 @@ class ChartDocumentController extends ChangeNotifier {
     _syncRevisionFromCore();
     _selectedNoteIds.removeWhere((id) => !_containsNoteId(id));
     _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
     _lastEventLog = event;
+    notifyListeners();
+  }
+
+  void _setFailureFromSession(String event, CoreSessionPort session) {
+    _lastEventLog = event;
+    _lastError = session.lastErrorDetails;
+    _lastErrorCode = session.lastErrorCode;
+    _lastErrorName = session.lastErrorName;
     notifyListeners();
   }
 
   void _setFailure(String event, String error) {
     _lastEventLog = event;
     _lastError = error;
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
     notifyListeners();
   }
 

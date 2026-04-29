@@ -28,6 +28,8 @@ abstract class CoreSessionPort {
   bool get isClosed;
   String get lastError;
   String get lastErrorDetails;
+  int get lastErrorCode;
+  String get lastErrorName;
   int get noteCount;
   int get chartRevision;
   CoreChartSummary? chartSummary();
@@ -149,6 +151,12 @@ class CoreSession implements CoreSessionPort {
 
   @override
   String get lastErrorDetails => _bindings.lastErrorDetails(_session);
+
+  @override
+  int get lastErrorCode => _bindings.lastErrorCode(_session);
+
+  @override
+  String get lastErrorName => _bindings.errorCodeName(lastErrorCode);
 
   @override
   int get noteCount => _bindings.noteCount(_session);

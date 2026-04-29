@@ -245,6 +245,8 @@ class _CoreSmokePageState extends State<CoreSmokePage>
               ),
               const SizedBox(height: 12),
               Text('log: ${_controller.lastEventLog}'),
+              Text('error_code: ${_controller.lastErrorCode}'),
+              Text('error_name: ${_controller.lastErrorName}'),
               if (_controller.lastError.isNotEmpty)
                 Text('error: ${_controller.lastError}'),
               const SizedBox(height: 12),

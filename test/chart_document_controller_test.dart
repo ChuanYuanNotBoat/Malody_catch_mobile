@@ -9,6 +9,8 @@ class FakeCoreSession implements CoreSessionPort {
   bool _canUndo = false;
   bool _canRedo = false;
   String _lastError = '';
+  int _lastErrorCode = 0;
+  String _lastErrorName = 'none';
   int _revision = 0;
 
   @override
@@ -18,8 +20,15 @@ class FakeCoreSession implements CoreSessionPort {
   String get lastError => _lastError;
 
   @override
-  String get lastErrorDetails =>
-      _lastError.isEmpty ? 'none(0)' : 'mock(6): $_lastError';
+  String get lastErrorDetails => _lastError.isEmpty
+      ? 'none(0)'
+      : '$_lastErrorName($_lastErrorCode): $_lastError';
+
+  @override
+  int get lastErrorCode => _lastErrorCode;
+
+  @override
+  String get lastErrorName => _lastErrorName;
 
   @override
   int get noteCount => _notes.length;
@@ -70,11 +79,11 @@ class FakeCoreSession implements CoreSessionPort {
     required int x,
   }) {
     if (_closed) {
-      _lastError = 'closed';
+      _setMockError('closed', 6, 'operation_failed');
       return false;
     }
     if (x < 0 || x > 512) {
-      _lastError = 'invalid_x';
+      _setMockError('invalid_x', 3, 'out_of_range');
       return false;
     }
     _notes.add(
@@ -97,7 +106,7 @@ class FakeCoreSession implements CoreSessionPort {
         offsetMs: 0,
       ),
     );
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _canUndo = true;
     _canRedo = false;
     _revision += 1;
@@ -112,11 +121,11 @@ class FakeCoreSession implements CoreSessionPort {
     required int x,
   }) {
     if (_closed) {
-      _lastError = 'closed';
+      _setMockError('closed', 6, 'operation_failed');
       return false;
     }
     if (x < 0 || x > 512) {
-      _lastError = 'invalid_x';
+      _setMockError('invalid_x', 3, 'out_of_range');
       return false;
     }
     _notes.add(
@@ -131,7 +140,7 @@ class FakeCoreSession implements CoreSessionPort {
         offsetMs: 0,
       ),
     );
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _canUndo = true;
     _canRedo = false;
     _revision += 1;
@@ -146,12 +155,12 @@ class FakeCoreSession implements CoreSessionPort {
     required int x,
   }) {
     if (_closed) {
-      _lastError = 'closed';
+      _setMockError('closed', 6, 'operation_failed');
       return false;
     }
     final index = _notes.indexWhere((n) => n.id == id && n.type == 3);
     if (index < 0) {
-      _lastError = 'not_found';
+      _setMockError('not_found', 5, 'not_found');
       return false;
     }
     _notes[index] = CoreNoteSnapshot(
@@ -164,7 +173,7 @@ class FakeCoreSession implements CoreSessionPort {
       volume: 100,
       offsetMs: 0,
     );
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _canUndo = true;
     _canRedo = false;
     _revision += 1;
@@ -180,11 +189,11 @@ class FakeCoreSession implements CoreSessionPort {
     required int offsetMs,
   }) {
     if (_closed) {
-      _lastError = 'closed';
+      _setMockError('closed', 6, 'operation_failed');
       return false;
     }
     if (sound.isEmpty) {
-      _lastError = 'invalid_sound';
+      _setMockError('invalid_sound', 4, 'validation_failed');
       return false;
     }
     _notes.add(
@@ -199,7 +208,7 @@ class FakeCoreSession implements CoreSessionPort {
         offsetMs: offsetMs,
       ),
     );
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _canUndo = true;
     _canRedo = false;
     _revision += 1;
@@ -209,16 +218,16 @@ class FakeCoreSession implements CoreSessionPort {
   @override
   bool removeNoteById(String id) {
     if (_closed) {
-      _lastError = 'closed';
+      _setMockError('closed', 6, 'operation_failed');
       return false;
     }
     final index = _notes.indexWhere((n) => n.id == id);
     if (index < 0) {
-      _lastError = 'not_found';
+      _setMockError('not_found', 5, 'not_found');
       return false;
     }
     _notes.removeAt(index);
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _canUndo = true;
     _canRedo = false;
     _revision += 1;
@@ -234,12 +243,12 @@ class FakeCoreSession implements CoreSessionPort {
   @override
   bool undo() {
     if (!_canUndo) {
-      _lastError = 'cannot_undo';
+      _setMockError('cannot_undo', 6, 'operation_failed');
       return false;
     }
     _canUndo = false;
     _canRedo = true;
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _revision += 1;
     return true;
   }
@@ -247,14 +256,20 @@ class FakeCoreSession implements CoreSessionPort {
   @override
   bool redo() {
     if (!_canRedo) {
-      _lastError = 'cannot_redo';
+      _setMockError('cannot_redo', 6, 'operation_failed');
       return false;
     }
     _canRedo = false;
     _canUndo = true;
-    _lastError = '';
+    _setMockError('', 0, 'none');
     _revision += 1;
     return true;
+  }
+
+  void _setMockError(String message, int code, String name) {
+    _lastError = message;
+    _lastErrorCode = code;
+    _lastErrorName = name;
   }
 
   @override
@@ -296,7 +311,9 @@ void main() {
 
     expect(controller.notes.length, 0);
     expect(controller.lastError, isNotEmpty);
-    expect(controller.lastError, contains('mock(6):'));
+    expect(controller.lastErrorCode, 3);
+    expect(controller.lastErrorName, 'out_of_range');
+    expect(controller.lastError, contains('out_of_range(3):'));
   });
 
   test('controller mode and draft roundtrip', () {
