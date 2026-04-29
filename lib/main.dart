@@ -28,13 +28,15 @@ class CoreSmokePage extends StatefulWidget {
   State<CoreSmokePage> createState() => _CoreSmokePageState();
 }
 
-class _CoreSmokePageState extends State<CoreSmokePage> {
+class _CoreSmokePageState extends State<CoreSmokePage>
+    with WidgetsBindingObserver {
   late final ChartDocumentController _controller;
   int _seed = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = ChartDocumentController()
       ..addListener(_onControllerChanged)
       ..runStartupSelfCheck();
@@ -42,6 +44,7 @@ class _CoreSmokePageState extends State<CoreSmokePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller
       ..removeListener(_onControllerChanged)
       ..dispose();
@@ -66,6 +69,12 @@ class _CoreSmokePageState extends State<CoreSmokePage> {
       denominator: 1,
       x: 128 + (_seed % 4) * 64,
     );
+  }
+
+  void _handleLifecycleSave() {
+    if (_controller.sessionOpen && _controller.dirty) {
+      _controller.saveDraftToMemory();
+    }
   }
 
   @override
@@ -133,7 +142,36 @@ class _CoreSmokePageState extends State<CoreSmokePage> {
                     onPressed: _controller.canRedo ? _controller.redo : null,
                     child: const Text('Redo'),
                   ),
+                  ElevatedButton(
+                    onPressed: _controller.saveDraftToMemory,
+                    child: const Text('Save Draft'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _controller.hasDraft
+                        ? _controller.restoreDraftFromMemory
+                        : null,
+                    child: const Text('Restore Draft'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _controller.clearSelection,
+                    child: const Text('Clear Selection'),
+                  ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              const Text('mode:'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: EditorMode.values
+                    .map(
+                      (mode) => ChoiceChip(
+                        label: Text(mode.name),
+                        selected: _controller.editorMode == mode,
+                        onSelected: (_) => _controller.setEditorMode(mode),
+                      ),
+                    )
+                    .toList(),
               ),
               const SizedBox(height: 12),
               Text('log: ${_controller.lastEventLog}'),
@@ -154,7 +192,7 @@ class _CoreSmokePageState extends State<CoreSmokePage> {
                           title: Text('${note.id}  beat=${note.beat.measure}'),
                           subtitle: Text('x=${note.x}  type=${note.type}'),
                           selected: selected.contains(note.id),
-                          onTap: () => _controller.selectSingle(note.id),
+                          onTap: () => _controller.handleNoteTap(note.id),
                         ),
                       )
                       .toList(),
@@ -164,5 +202,13 @@ class _CoreSmokePageState extends State<CoreSmokePage> {
         ),
       ),
     );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _handleLifecycleSave();
+    }
   }
 }

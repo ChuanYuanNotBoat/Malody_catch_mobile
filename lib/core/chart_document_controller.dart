@@ -5,11 +5,32 @@ import 'package:flutter/foundation.dart';
 import 'core_session.dart';
 import 'native_core.dart';
 
+enum EditorMode { placeNormal, placeRain, delete, select, move }
+
+class _DraftState {
+  const _DraftState({
+    required this.filePath,
+    required this.notes,
+    required this.selectedIds,
+    required this.dirty,
+    required this.revision,
+    required this.mode,
+  });
+
+  final String? filePath;
+  final List<CoreNoteSnapshot> notes;
+  final Set<String> selectedIds;
+  final bool dirty;
+  final int revision;
+  final EditorMode mode;
+}
+
 class ChartDocumentController extends ChangeNotifier {
   ChartDocumentController({CoreSessionFactory? sessionFactory})
     : _sessionFactory = sessionFactory ?? CoreSession.open;
 
   final CoreSessionFactory _sessionFactory;
+  static _DraftState? _memoryDraft;
 
   CoreStartupReport? _startupReport;
   CoreSessionPort? _session;
@@ -22,6 +43,7 @@ class ChartDocumentController extends ChangeNotifier {
   String _lastEventLog = '';
   String _lastError = '';
   int _noteIdSeed = 0;
+  EditorMode _editorMode = EditorMode.select;
 
   CoreStartupReport? get startupReport => _startupReport;
   bool get sessionOpen => _session != null;
@@ -32,6 +54,8 @@ class ChartDocumentController extends ChangeNotifier {
   String get lastError => _lastError;
   bool get canUndo => _session?.canUndo ?? false;
   bool get canRedo => _session?.canRedo ?? false;
+  EditorMode get editorMode => _editorMode;
+  bool get hasDraft => _memoryDraft != null;
 
   UnmodifiableListView<CoreNoteSnapshot> get notes {
     _refreshSnapshotsIfNeeded();
@@ -83,6 +107,31 @@ class ChartDocumentController extends ChangeNotifier {
     _lastError = '';
     _lastEventLog = 'session_closed';
     notifyListeners();
+  }
+
+  void setEditorMode(EditorMode mode) {
+    if (_editorMode == mode) {
+      return;
+    }
+    _editorMode = mode;
+    _lastError = '';
+    _lastEventLog = 'mode_set:${mode.name}';
+    notifyListeners();
+  }
+
+  void handleNoteTap(String id) {
+    switch (_editorMode) {
+      case EditorMode.delete:
+        removeNoteById(id);
+      case EditorMode.select:
+        toggleSelection(id);
+      case EditorMode.placeNormal:
+      case EditorMode.placeRain:
+      case EditorMode.move:
+        selectSingle(id);
+        _lastEventLog = 'note_tap:${_editorMode.name}:$id';
+        notifyListeners();
+    }
   }
 
   void addNormalNote({
@@ -193,11 +242,94 @@ class ChartDocumentController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleSelection(String id) {
+    if (!_containsNoteId(id)) {
+      _setFailure('toggle_select_failed', 'note_not_found:$id');
+      return;
+    }
+    if (_selectedNoteIds.contains(id)) {
+      _selectedNoteIds.remove(id);
+    } else {
+      _selectedNoteIds.add(id);
+    }
+    _lastError = '';
+    _lastEventLog = 'toggle_select_ok:$id';
+    notifyListeners();
+  }
+
   void clearSelection() {
     _selectedNoteIds.clear();
     _lastError = '';
     _lastEventLog = 'selection_cleared';
     notifyListeners();
+  }
+
+  void saveDraftToMemory() {
+    _refreshSnapshotsIfNeeded();
+    _memoryDraft = _DraftState(
+      filePath: _currentFilePath,
+      notes: List<CoreNoteSnapshot>.from(_cachedNotes),
+      selectedIds: Set<String>.from(_selectedNoteIds),
+      dirty: _dirty,
+      revision: _revision,
+      mode: _editorMode,
+    );
+    _lastError = '';
+    _lastEventLog = 'draft_saved:${_cachedNotes.length}';
+    notifyListeners();
+  }
+
+  void restoreDraftFromMemory() {
+    final draft = _memoryDraft;
+    if (draft == null) {
+      _setFailure('draft_restore_failed', 'draft_not_found');
+      return;
+    }
+
+    try {
+      _session?.close();
+      final session = _sessionFactory();
+      _session = session;
+      _currentFilePath = draft.filePath;
+      _dirty = draft.dirty;
+      _revision = draft.revision;
+      _cacheRevision = -1;
+      _cachedNotes.clear();
+      _selectedNoteIds.clear();
+      _editorMode = draft.mode;
+
+      var restored = 0;
+      var skipped = 0;
+      for (final note in draft.notes) {
+        if (note.type != 0) {
+          skipped += 1;
+          continue;
+        }
+        final ok = session.addNormalNote(
+          id: note.id,
+          measure: note.beat.measure,
+          numerator: note.beat.numerator,
+          denominator: note.beat.denominator,
+          x: note.x,
+        );
+        if (ok) {
+          restored += 1;
+        } else {
+          skipped += 1;
+        }
+      }
+
+      _refreshSnapshotsIfNeeded();
+      _selectedNoteIds.addAll(
+        draft.selectedIds.where((id) => _containsNoteId(id)),
+      );
+
+      _lastError = '';
+      _lastEventLog = 'draft_restored:$restored:$skipped';
+      notifyListeners();
+    } catch (e) {
+      _setFailure('draft_restore_failed', e.toString());
+    }
   }
 
   @override

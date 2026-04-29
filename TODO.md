@@ -27,10 +27,10 @@ Android 首版先完成移动端低延迟编辑闭环：
 - [x] 建立 `ChartDocumentController`：持有 core session、当前文件路径、dirty 状态。
 - [x] 建立 note snapshot 缓存，按 core revision 刷新。
 - [x] 建立 selection state：单选、多选、清空、按 id 查询。
-- [ ] 建立 editor mode：place normal、place rain、delete、select、move。
+- [x] 建立 editor mode：place normal、place rain、delete、select、move（当前先用于状态和交互分发）。
 - [x] 建立 undo/redo state，同步按钮可用状态。
 - [x] 建立错误展示通道：先用页面 log/error 区域承载，后续再接 SnackBar/dialog。
-- [ ] 增加 autosave 草稿策略，避免移动端切后台丢数据。
+- [x] 增加 autosave 草稿策略：当前先实现内存草稿与生命周期保存/恢复入口。
 
 ## P2 - Canvas 与触摸交互
 

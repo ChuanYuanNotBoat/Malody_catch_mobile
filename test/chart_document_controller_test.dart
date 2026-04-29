@@ -157,4 +157,30 @@ void main() {
     expect(controller.notes.length, 0);
     expect(controller.lastError, isNotEmpty);
   });
+
+  test('controller mode and draft roundtrip', () {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+
+    controller.openSession();
+    controller.setEditorMode(EditorMode.delete);
+    expect(controller.editorMode, EditorMode.delete);
+
+    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 160);
+    final originalId = controller.notes.first.id;
+    controller.selectSingle(originalId);
+    controller.saveDraftToMemory();
+    expect(controller.hasDraft, isTrue);
+
+    controller.closeSession();
+    expect(controller.sessionOpen, isFalse);
+
+    controller.restoreDraftFromMemory();
+    expect(controller.sessionOpen, isTrue);
+    expect(controller.notes.length, 1);
+    expect(controller.notes.first.id, originalId);
+    expect(controller.selectedNoteIds.contains(originalId), isTrue);
+    expect(controller.editorMode, EditorMode.delete);
+  });
 }
