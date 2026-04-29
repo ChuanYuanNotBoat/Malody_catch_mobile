@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'core/chart_document_controller.dart';
+import 'core/native_core.dart';
 
 void main() {
   runApp(const MalodyCatchMobileApp());
@@ -71,6 +72,34 @@ class _CoreSmokePageState extends State<CoreSmokePage>
     );
   }
 
+  void _addRainNote() {
+    _seed += 1;
+    _controller.addRainNote(
+      beat: CoreBeat(measure: _seed, numerator: 0, denominator: 1),
+      endBeat: CoreBeat(measure: _seed, numerator: 1, denominator: 1),
+      x: 96 + (_seed % 5) * 64,
+    );
+  }
+
+  void _addSoundNote() {
+    _seed += 1;
+    _controller.addSoundNote(
+      beat: CoreBeat(measure: _seed, numerator: 0, denominator: 1),
+      sound: 'mobile_sfx/tap.wav',
+      volume: 90,
+      offsetMs: 0,
+    );
+  }
+
+  void _moveSelectedRain() {
+    _seed += 1;
+    _controller.moveSelectedRainNote(
+      beat: CoreBeat(measure: _seed, numerator: 0, denominator: 1),
+      endBeat: CoreBeat(measure: _seed, numerator: 1, denominator: 1),
+      x: 128 + (_seed % 3) * 80,
+    );
+  }
+
   void _handleLifecycleSave() {
     if (_controller.sessionOpen && _controller.dirty) {
       _controller.saveDraftToMemory();
@@ -82,6 +111,9 @@ class _CoreSmokePageState extends State<CoreSmokePage>
     final report = _controller.startupReport;
     final notes = _controller.notes;
     final selected = _controller.selectedNoteIds;
+    final canMoveSelectedRain =
+        selected.length == 1 &&
+        notes.any((note) => note.id == selected.first && note.type == 3);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Core FFI Smoke')),
@@ -93,6 +125,11 @@ class _CoreSmokePageState extends State<CoreSmokePage>
             children: [
               Text('library_loaded: ${report?.libraryLoaded ?? false}'),
               Text('session_create_probe: ${report?.sessionCreated ?? false}'),
+              Text('core_version: ${report?.coreVersion ?? ''}'),
+              Text('abi_version: ${report?.abiVersion ?? -1}'),
+              Text(
+                'abi_min_required: ${report?.minimumAbiVersion ?? mceMinimumAbiVersion}',
+              ),
               Text('startup_ok: ${report?.success ?? false}'),
               if (report?.errorMessage != null)
                 Text('startup_error: ${report!.errorMessage}'),
@@ -123,6 +160,18 @@ class _CoreSmokePageState extends State<CoreSmokePage>
                   ElevatedButton(
                     onPressed: _addNormalNote,
                     child: const Text('Add Note'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _addRainNote,
+                    child: const Text('Add Rain'),
+                  ),
+                  ElevatedButton(
+                    onPressed: _addSoundNote,
+                    child: const Text('Add Sound'),
+                  ),
+                  ElevatedButton(
+                    onPressed: canMoveSelectedRain ? _moveSelectedRain : null,
+                    child: const Text('Move Rain'),
                   ),
                   ElevatedButton(
                     onPressed: _controller.removeLastNote,
@@ -190,7 +239,9 @@ class _CoreSmokePageState extends State<CoreSmokePage>
                           dense: true,
                           contentPadding: EdgeInsets.zero,
                           title: Text('${note.id}  beat=${note.beat.measure}'),
-                          subtitle: Text('x=${note.x}  type=${note.type}'),
+                          subtitle: Text(
+                            'x=${note.x}  type=${note.type}  end=${note.endBeat.measure}:${note.endBeat.numerator}/${note.endBeat.denominator}  sound=${note.sound}',
+                          ),
                           selected: selected.contains(note.id),
                           onTap: () => _controller.handleNoteTap(note.id),
                         ),

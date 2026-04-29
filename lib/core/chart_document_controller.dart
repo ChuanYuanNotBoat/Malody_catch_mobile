@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -28,6 +29,11 @@ class _DraftState {
 class ChartDocumentController extends ChangeNotifier {
   ChartDocumentController({CoreSessionFactory? sessionFactory})
     : _sessionFactory = sessionFactory ?? CoreSession.open;
+
+  static const int _noteTypeNormal = 0;
+  static const int _noteTypeSound = 1;
+  static const int _noteTypeRain = 3;
+  static const int _snapshotBatchSize = 128;
 
   final CoreSessionFactory _sessionFactory;
   static _DraftState? _memoryDraft;
@@ -81,11 +87,11 @@ class ChartDocumentController extends ChangeNotifier {
       _session = _sessionFactory();
       _currentFilePath = filePath;
       _dirty = false;
-      _revision = 0;
       _cacheRevision = -1;
       _cachedNotes.clear();
       _selectedNoteIds.clear();
       _lastError = '';
+      _syncRevisionFromCore();
       _lastEventLog = 'session_opened';
     } catch (e) {
       _session = null;
@@ -123,14 +129,17 @@ class ChartDocumentController extends ChangeNotifier {
     switch (_editorMode) {
       case EditorMode.delete:
         removeNoteById(id);
+        return;
       case EditorMode.select:
         toggleSelection(id);
+        return;
       case EditorMode.placeNormal:
       case EditorMode.placeRain:
       case EditorMode.move:
         selectSingle(id);
         _lastEventLog = 'note_tap:${_editorMode.name}:$id';
         notifyListeners();
+        return;
     }
   }
 
@@ -156,11 +165,97 @@ class ChartDocumentController extends ChangeNotifier {
       x: x,
     );
     if (!ok) {
-      _setFailure('add_note_failed', session.lastError);
+      _setFailure('add_note_failed', session.lastErrorDetails);
       return;
     }
 
     _markChanged('add_note_ok:$id');
+  }
+
+  void addRainNote({
+    required CoreBeat beat,
+    required CoreBeat endBeat,
+    required int x,
+  }) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('add_rain_skipped', 'session_not_open');
+      return;
+    }
+
+    _noteIdSeed += 1;
+    final id = 'mobile-rain-$_noteIdSeed';
+    final ok = session.addRainNote(id: id, beat: beat, endBeat: endBeat, x: x);
+    if (!ok) {
+      _setFailure('add_rain_failed', session.lastErrorDetails);
+      return;
+    }
+
+    _markChanged('add_rain_ok:$id');
+  }
+
+  void moveSelectedRainNote({
+    required CoreBeat beat,
+    required CoreBeat endBeat,
+    required int x,
+  }) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('move_rain_skipped', 'session_not_open');
+      return;
+    }
+    if (_selectedNoteIds.length != 1) {
+      _setFailure('move_rain_skipped', 'select_single_rain_note');
+      return;
+    }
+
+    final id = _selectedNoteIds.first;
+    final note = _findNoteById(id);
+    if (note == null) {
+      _setFailure('move_rain_failed', 'note_not_found:$id');
+      return;
+    }
+    if (note.type != _noteTypeRain) {
+      _setFailure('move_rain_failed', 'note_not_rain:$id');
+      return;
+    }
+
+    final ok = session.moveRainNote(id: id, beat: beat, endBeat: endBeat, x: x);
+    if (!ok) {
+      _setFailure('move_rain_failed', session.lastErrorDetails);
+      return;
+    }
+
+    _markChanged('move_rain_ok:$id');
+  }
+
+  void addSoundNote({
+    required CoreBeat beat,
+    required String sound,
+    int volume = 100,
+    int offsetMs = 0,
+  }) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('add_sound_skipped', 'session_not_open');
+      return;
+    }
+
+    _noteIdSeed += 1;
+    final id = 'mobile-sound-$_noteIdSeed';
+    final ok = session.addSoundNote(
+      id: id,
+      beat: beat,
+      sound: sound,
+      volume: volume,
+      offsetMs: offsetMs,
+    );
+    if (!ok) {
+      _setFailure('add_sound_failed', session.lastErrorDetails);
+      return;
+    }
+
+    _markChanged('add_sound_ok:$id');
   }
 
   void removeNoteById(String id) {
@@ -172,7 +267,7 @@ class ChartDocumentController extends ChangeNotifier {
 
     final ok = session.removeNoteById(id);
     if (!ok) {
-      _setFailure('remove_note_failed', session.lastError);
+      _setFailure('remove_note_failed', session.lastErrorDetails);
       return;
     }
 
@@ -197,16 +292,10 @@ class ChartDocumentController extends ChangeNotifier {
     }
     final ok = session.undo();
     if (!ok) {
-      _setFailure('undo_failed', session.lastError);
+      _setFailure('undo_failed', session.lastErrorDetails);
       return;
     }
-    _revision += 1;
-    _dirty = true;
-    _cacheRevision = -1;
-    _selectedNoteIds.removeWhere((id) => !_containsNoteId(id));
-    _lastError = '';
-    _lastEventLog = 'undo_ok';
-    notifyListeners();
+    _markChanged('undo_ok');
   }
 
   void redo() {
@@ -217,16 +306,10 @@ class ChartDocumentController extends ChangeNotifier {
     }
     final ok = session.redo();
     if (!ok) {
-      _setFailure('redo_failed', session.lastError);
+      _setFailure('redo_failed', session.lastErrorDetails);
       return;
     }
-    _revision += 1;
-    _dirty = true;
-    _cacheRevision = -1;
-    _selectedNoteIds.removeWhere((id) => !_containsNoteId(id));
-    _lastError = '';
-    _lastEventLog = 'redo_ok';
-    notifyListeners();
+    _markChanged('redo_ok');
   }
 
   void selectSingle(String id) {
@@ -292,7 +375,6 @@ class ChartDocumentController extends ChangeNotifier {
       _session = session;
       _currentFilePath = draft.filePath;
       _dirty = draft.dirty;
-      _revision = draft.revision;
       _cacheRevision = -1;
       _cachedNotes.clear();
       _selectedNoteIds.clear();
@@ -301,17 +383,7 @@ class ChartDocumentController extends ChangeNotifier {
       var restored = 0;
       var skipped = 0;
       for (final note in draft.notes) {
-        if (note.type != 0) {
-          skipped += 1;
-          continue;
-        }
-        final ok = session.addNormalNote(
-          id: note.id,
-          measure: note.beat.measure,
-          numerator: note.beat.numerator,
-          denominator: note.beat.denominator,
-          x: note.x,
-        );
+        final ok = _restoreNote(session, note);
         if (ok) {
           restored += 1;
         } else {
@@ -319,6 +391,7 @@ class ChartDocumentController extends ChangeNotifier {
         }
       }
 
+      _syncRevisionFromCore();
       _refreshSnapshotsIfNeeded();
       _selectedNoteIds.addAll(
         draft.selectedIds.where((id) => _containsNoteId(id)),
@@ -339,10 +412,41 @@ class ChartDocumentController extends ChangeNotifier {
     super.dispose();
   }
 
+  bool _restoreNote(CoreSessionPort session, CoreNoteSnapshot note) {
+    switch (note.type) {
+      case _noteTypeNormal:
+        return session.addNormalNote(
+          id: note.id,
+          measure: note.beat.measure,
+          numerator: note.beat.numerator,
+          denominator: note.beat.denominator,
+          x: note.x,
+        );
+      case _noteTypeRain:
+        return session.addRainNote(
+          id: note.id,
+          beat: note.beat,
+          endBeat: note.endBeat,
+          x: note.x,
+        );
+      case _noteTypeSound:
+        return session.addSoundNote(
+          id: note.id,
+          beat: note.beat,
+          sound: note.sound,
+          volume: note.volume,
+          offsetMs: note.offsetMs,
+        );
+      default:
+        return false;
+    }
+  }
+
   void _markChanged(String event) {
     _dirty = true;
-    _revision += 1;
     _cacheRevision = -1;
+    _syncRevisionFromCore();
+    _selectedNoteIds.removeWhere((id) => !_containsNoteId(id));
     _lastError = '';
     _lastEventLog = event;
     notifyListeners();
@@ -354,14 +458,30 @@ class ChartDocumentController extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool _containsNoteId(String id) {
+  CoreNoteSnapshot? _findNoteById(String id) {
     _refreshSnapshotsIfNeeded();
     for (final note in _cachedNotes) {
       if (note.id == id) {
-        return true;
+        return note;
       }
     }
-    return false;
+    return null;
+  }
+
+  bool _containsNoteId(String id) => _findNoteById(id) != null;
+
+  void _syncRevisionFromCore() {
+    final session = _session;
+    if (session == null) {
+      _revision = 0;
+      return;
+    }
+    final summary = session.chartSummary();
+    if (summary != null) {
+      _revision = summary.revision;
+      return;
+    }
+    _revision = session.chartRevision;
   }
 
   void _refreshSnapshotsIfNeeded() {
@@ -371,21 +491,45 @@ class ChartDocumentController extends ChangeNotifier {
       _cacheRevision = _revision;
       return;
     }
-    if (_cacheRevision == _revision) {
+
+    final coreRevision = session.chartRevision;
+    if (_cacheRevision == coreRevision) {
+      _revision = coreRevision;
       return;
     }
 
     final count = session.noteCount;
     final refreshed = <CoreNoteSnapshot>[];
-    for (var i = 0; i < count; i++) {
-      final note = session.noteSnapshot(i);
-      if (note != null) {
-        refreshed.add(note);
+    var cursor = 0;
+    while (cursor < count) {
+      final take = min(_snapshotBatchSize, count - cursor);
+      final batch = session.noteSnapshots(startIndex: cursor, maxCount: take);
+      if (batch.isEmpty) {
+        break;
+      }
+      refreshed.addAll(batch);
+      cursor += batch.length;
+      if (batch.length < take) {
+        break;
       }
     }
+
+    if (refreshed.length < count) {
+      for (var i = refreshed.length; i < count; i++) {
+        final note = session.noteSnapshot(i);
+        if (note != null) {
+          refreshed.add(note);
+        }
+      }
+    }
+
     _cachedNotes
       ..clear()
       ..addAll(refreshed);
-    _cacheRevision = _revision;
+    _selectedNoteIds.removeWhere(
+      (id) => !_cachedNotes.any((note) => note.id == id),
+    );
+    _revision = coreRevision;
+    _cacheRevision = coreRevision;
   }
 }

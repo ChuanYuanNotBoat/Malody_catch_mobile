@@ -10,11 +10,15 @@ void main() {
 
     expect(find.text('Core FFI Smoke'), findsOneWidget);
     expect(find.textContaining('library_loaded:'), findsOneWidget);
+    expect(find.textContaining('abi_version:'), findsOneWidget);
+    expect(find.textContaining('abi_min_required:'), findsOneWidget);
     expect(
       find.widgetWithText(ElevatedButton, 'Startup Check'),
       findsOneWidget,
     );
     expect(find.widgetWithText(ElevatedButton, 'Open Session'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Add Rain'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Add Sound'), findsOneWidget);
     expect(find.byType(Scaffold), findsOneWidget);
   });
 }
