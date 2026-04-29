@@ -111,7 +111,10 @@ class _CoreSmokePageState extends State<CoreSmokePage>
     final report = _controller.startupReport;
     final notes = _controller.notes;
     final selected = _controller.selectedNoteIds;
+    final startupReady = report?.success ?? false;
+    final canOperateSession = startupReady && _controller.sessionOpen;
     final canMoveSelectedRain =
+        canOperateSession &&
         selected.length == 1 &&
         notes.any((note) => note.id == selected.first && note.type == 3);
 
@@ -133,6 +136,10 @@ class _CoreSmokePageState extends State<CoreSmokePage>
               Text('startup_ok: ${report?.success ?? false}'),
               if (report?.errorMessage != null)
                 Text('startup_error: ${report!.errorMessage}'),
+              if (!startupReady)
+                const Text(
+                  'status: startup check required (or ABI mismatch), editing actions are disabled',
+                ),
               const SizedBox(height: 12),
               Text('session_open: ${_controller.sessionOpen}'),
               Text('note_count: ${notes.length}'),
@@ -150,23 +157,25 @@ class _CoreSmokePageState extends State<CoreSmokePage>
                     child: const Text('Startup Check'),
                   ),
                   ElevatedButton(
-                    onPressed: _openSession,
+                    onPressed: startupReady ? _openSession : null,
                     child: const Text('Open Session'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.closeSession,
+                    onPressed: _controller.sessionOpen
+                        ? _controller.closeSession
+                        : null,
                     child: const Text('Close Session'),
                   ),
                   ElevatedButton(
-                    onPressed: _addNormalNote,
+                    onPressed: canOperateSession ? _addNormalNote : null,
                     child: const Text('Add Note'),
                   ),
                   ElevatedButton(
-                    onPressed: _addRainNote,
+                    onPressed: canOperateSession ? _addRainNote : null,
                     child: const Text('Add Rain'),
                   ),
                   ElevatedButton(
-                    onPressed: _addSoundNote,
+                    onPressed: canOperateSession ? _addSoundNote : null,
                     child: const Text('Add Sound'),
                   ),
                   ElevatedButton(
@@ -174,35 +183,45 @@ class _CoreSmokePageState extends State<CoreSmokePage>
                     child: const Text('Move Rain'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.removeLastNote,
+                    onPressed: canOperateSession
+                        ? _controller.removeLastNote
+                        : null,
                     child: const Text('Remove Last'),
                   ),
                   ElevatedButton(
-                    onPressed: selected.isEmpty
+                    onPressed: !canOperateSession || selected.isEmpty
                         ? null
                         : () => _controller.removeNoteById(selected.first),
                     child: const Text('Remove Selected'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.canUndo ? _controller.undo : null,
+                    onPressed: canOperateSession && _controller.canUndo
+                        ? _controller.undo
+                        : null,
                     child: const Text('Undo'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.canRedo ? _controller.redo : null,
+                    onPressed: canOperateSession && _controller.canRedo
+                        ? _controller.redo
+                        : null,
                     child: const Text('Redo'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.saveDraftToMemory,
+                    onPressed: canOperateSession
+                        ? _controller.saveDraftToMemory
+                        : null,
                     child: const Text('Save Draft'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.hasDraft
+                    onPressed: canOperateSession && _controller.hasDraft
                         ? _controller.restoreDraftFromMemory
                         : null,
                     child: const Text('Restore Draft'),
                   ),
                   ElevatedButton(
-                    onPressed: _controller.clearSelection,
+                    onPressed: canOperateSession
+                        ? _controller.clearSelection
+                        : null,
                     child: const Text('Clear Selection'),
                   ),
                 ],
@@ -217,7 +236,9 @@ class _CoreSmokePageState extends State<CoreSmokePage>
                       (mode) => ChoiceChip(
                         label: Text(mode.name),
                         selected: _controller.editorMode == mode,
-                        onSelected: (_) => _controller.setEditorMode(mode),
+                        onSelected: canOperateSession
+                            ? (_) => _controller.setEditorMode(mode)
+                            : null,
                       ),
                     )
                     .toList(),
