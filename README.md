@@ -1,6 +1,17 @@
-# malody_catch_mobile
+# Malody Catch Mobile
 
-A new Flutter project.
+Flutter Android client for the Malody Catch editor migration.
+
+The app is intentionally separate from the existing Qt desktop editor. Core
+chart-editing behavior is expected to come from the sibling
+`Malody_catch_core` repository through `dart:ffi`.
+
+## Current State
+
+- Android-only Flutter project scaffold.
+- Initial Dart FFI binding in `lib/core/native_core.dart`.
+- The native shared library is not bundled yet; Android packaging will add
+  `libmalody_catch_core_ffi.so` after the core Android build is ready.
 
 ## Getting Started
 
