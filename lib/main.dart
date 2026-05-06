@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as path;
 
 import 'core/chart_document_controller.dart';
 import 'core/native_core.dart';
@@ -215,7 +216,11 @@ class _MobileEditorPageState extends State<MobileEditorPage>
           return;
         }
 
-        final fileName = await _requestSaveFileName();
+        final fileName = await _requestFileName(
+          dialogTitle: 'Save File Name',
+          hintText: 'chart_name.mc',
+          defaultValue: 'mobile_chart.mc',
+        );
         if (fileName == null || fileName.trim().isEmpty) {
           _controller.reportExternalError(
             event: 'save_chart_cancelled',
@@ -239,17 +244,84 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     }
   }
 
-  Future<String?> _requestSaveFileName() async {
-    var candidate = 'mobile_chart.mc';
+  Future<void> _exportMcz() async {
+    try {
+      if (_controller.dirty) {
+        await _saveChart();
+      }
+      if (_controller.dirty) {
+        _controller.reportExternalError(
+          event: 'mcz_export_cancelled',
+          message: 'mcz_export_save_required',
+        );
+        return;
+      }
+
+      final sourceChartPath = _controller.currentFilePath;
+      if (sourceChartPath == null || sourceChartPath.trim().isEmpty) {
+        _controller.reportExternalError(
+          event: 'mcz_export_failed',
+          message: 'mcz_export_chart_path_required',
+        );
+        return;
+      }
+
+      final outputDir = await _filePicker.pickDirectoryForSave();
+      if (outputDir == null || outputDir.trim().isEmpty) {
+        _controller.reportExternalError(
+          event: 'mcz_export_cancelled',
+          message: 'mcz_export_directory_not_selected',
+        );
+        return;
+      }
+
+      final suggestedName =
+          '${path.basenameWithoutExtension(sourceChartPath.trim())}.mcz';
+      final fileName = await _requestFileName(
+        dialogTitle: 'Export File Name',
+        hintText: 'chart_pack.mcz',
+        defaultValue: suggestedName,
+      );
+      if (fileName == null || fileName.trim().isEmpty) {
+        _controller.reportExternalError(
+          event: 'mcz_export_cancelled',
+          message: 'mcz_export_file_name_not_provided',
+        );
+        return;
+      }
+
+      final normalized = fileName.trim().toLowerCase().endsWith('.mcz')
+          ? fileName.trim()
+          : '${fileName.trim()}.mcz';
+      final targetPath = '$outputDir${Platform.pathSeparator}$normalized';
+      await _controller.exportMczFile(
+        outputPath: targetPath,
+        archive: _chartArchive,
+        workspace: _chartWorkspace,
+      );
+    } catch (e) {
+      _controller.reportExternalError(
+        event: 'mcz_export_failed',
+        message: 'mcz_export_picker_exception:$e',
+      );
+    }
+  }
+
+  Future<String?> _requestFileName({
+    required String dialogTitle,
+    required String hintText,
+    required String defaultValue,
+  }) async {
+    var candidate = defaultValue;
     return showDialog<String>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Save File Name'),
+          title: Text(dialogTitle),
           content: TextFormField(
             initialValue: candidate,
             autofocus: true,
-            decoration: const InputDecoration(hintText: 'chart_name.mc'),
+            decoration: InputDecoration(hintText: hintText),
             onChanged: (value) => candidate = value,
             onFieldSubmitted: (value) => Navigator.of(dialogContext).pop(value),
           ),
@@ -337,6 +409,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                 FilledButton(
                   onPressed: canOperate ? _saveChart : null,
                   child: const Text('Save .mc'),
+                ),
+                FilledButton(
+                  onPressed: canOperate ? _exportMcz : null,
+                  child: const Text('Export .mcz'),
                 ),
                 FilledButton(
                   onPressed: canOperate && _controller.canUndo

@@ -20,8 +20,11 @@ chart-editing behavior is expected to come from the sibling
   `lib/core/native_core.dart`.
 - `CoreSession` + `ChartDocumentController` are wired in
   `lib/core/core_session.dart` and `lib/core/chart_document_controller.dart`.
-- File entry now uses system picker (`file_picker`):
-  open `.mc/.mcz` (with `.mcz` fallback prompt) and save `.mc`.
+- File entry now uses system picker (`file_picker`) for open/save/export.
+- `.mcz` import flow is enabled:
+  secure unzip -> chart selection -> referenced asset copy -> workspace rewrite.
+- `.mcz` export flow is enabled:
+  save latest `.mc` -> package `0/<chart>.mc` + referenced assets only.
 - Save flow supports both direct overwrite (known path) and
   directory-pick + filename input (new file).
 - Android `arm64-v8a` native library is bundled at

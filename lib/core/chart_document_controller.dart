@@ -40,6 +40,18 @@ class _ResolvedResourcePath {
   final String relativePath;
 }
 
+class _ExportResourceSpec {
+  const _ExportResourceSpec({
+    required this.normalizedReference,
+    required this.sourcePath,
+    required this.archiveRelativePath,
+  });
+
+  final String normalizedReference;
+  final String sourcePath;
+  final String archiveRelativePath;
+}
+
 class _DraftState {
   const _DraftState({
     required this.filePath,
@@ -498,11 +510,149 @@ class ChartDocumentController extends ChangeNotifier {
     required ChartArchivePort archive,
     required ChartWorkspacePort workspace,
   }) async {
-    reportExternalError(
-      event: '${_mczExportEventPrefix}failed',
-      message: '${_mczExportEventPrefix}not_implemented',
-    );
-    return false;
+    final normalizedOutputPath = outputPath.trim();
+    if (!normalizedOutputPath.toLowerCase().endsWith('.mcz')) {
+      reportExternalError(
+        event: '${_mczExportEventPrefix}failed',
+        message: '${_mczExportEventPrefix}unsupported_extension',
+      );
+      return false;
+    }
+
+    if (_session == null) {
+      reportExternalError(
+        event: '${_mczExportEventPrefix}failed',
+        message: '${_mczExportEventPrefix}session_not_open',
+      );
+      return false;
+    }
+
+    final sourceMcPath = (_currentFilePath ?? '').trim();
+    if (sourceMcPath.isEmpty) {
+      reportExternalError(
+        event: '${_mczExportEventPrefix}failed',
+        message: '${_mczExportEventPrefix}chart_path_required',
+      );
+      return false;
+    }
+
+    if (_dirty) {
+      final saved = saveChart(path: sourceMcPath);
+      if (!saved) {
+        reportExternalError(
+          event: '${_mczExportEventPrefix}failed',
+          message: '${_mczExportEventPrefix}save_failed:$lastError',
+        );
+        return false;
+      }
+    }
+
+    if (!File(sourceMcPath).existsSync()) {
+      reportExternalError(
+        event: '${_mczExportEventPrefix}failed',
+        message: '${_mczExportEventPrefix}source_not_found:$sourceMcPath',
+      );
+      return false;
+    }
+
+    String? tempDirectoryPath;
+    try {
+      final sourceChart = McChartIo.parse(
+        File(sourceMcPath).readAsStringSync(),
+      );
+      final sourceChartDirectory = File(sourceMcPath).parent.path;
+      final exportResources = <_ExportResourceSpec>[];
+      final seenReferences = <String>{};
+
+      for (final ref in _collectReferencedResourcePaths(
+        metadata: sourceChart.metadata,
+        notes: sourceChart.notes,
+      )) {
+        final spec = _resolveExportResourceSpec(
+          chartDirectory: sourceChartDirectory,
+          normalizedReference: ref,
+        );
+        if (!seenReferences.add(spec.normalizedReference)) {
+          continue;
+        }
+        if (!workspace.fileExists(spec.sourcePath)) {
+          reportExternalError(
+            event: '${_mczExportEventPrefix}failed',
+            message:
+                '${_mczExportEventPrefix}resource_missing:${spec.archiveRelativePath}',
+          );
+          return false;
+        }
+        exportResources.add(spec);
+      }
+
+      final rewriteMapping = <String, String>{
+        for (final spec in exportResources)
+          spec.normalizedReference: spec.archiveRelativePath,
+      };
+      final rewrittenMetadata = _rewriteMetadataReferences(
+        sourceChart.metadata,
+        rewriteMapping,
+      );
+      final rewrittenNotes = _rewriteNoteReferences(
+        sourceChart.notes,
+        rewriteMapping,
+      );
+
+      tempDirectoryPath = await workspace.createImportTempDirectory();
+      final chartFileName = path.basename(sourceMcPath);
+      final tempChartPath = path.join(tempDirectoryPath, chartFileName);
+      final chartContent = McChartIo.encode(
+        metadata: rewrittenMetadata,
+        bpms: sourceChart.bpms,
+        notes: rewrittenNotes,
+      );
+      await workspace.writeTextFile(
+        targetPath: tempChartPath,
+        content: chartContent,
+      );
+
+      final archiveFiles = <ChartArchiveFileSpec>[
+        ChartArchiveFileSpec(
+          sourcePath: tempChartPath,
+          archivePath: '0/$chartFileName',
+        ),
+      ];
+      final seenArchivePaths = <String>{'0/$chartFileName'};
+      for (final resource in exportResources) {
+        final archivePath = '0/${resource.archiveRelativePath}';
+        if (!seenArchivePaths.add(archivePath)) {
+          continue;
+        }
+        archiveFiles.add(
+          ChartArchiveFileSpec(
+            sourcePath: resource.sourcePath,
+            archivePath: archivePath,
+          ),
+        );
+      }
+
+      await archive.createMcz(
+        outputPath: normalizedOutputPath,
+        files: archiveFiles,
+      );
+      _lastEventLog = '${_mczExportEventPrefix}ok';
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      reportExternalError(
+        event: '${_mczExportEventPrefix}failed',
+        message: '${_mczExportEventPrefix}exception:$e',
+      );
+      return false;
+    } finally {
+      if (tempDirectoryPath != null && tempDirectoryPath.isNotEmpty) {
+        await workspace.deleteDirectory(tempDirectoryPath);
+      }
+    }
   }
 
   void handleNoteTap(String id) {
@@ -980,6 +1130,40 @@ class ChartDocumentController extends ChangeNotifier {
     );
   }
 
+  _ExportResourceSpec _resolveExportResourceSpec({
+    required String chartDirectory,
+    required String normalizedReference,
+  }) {
+    if (normalizedReference.startsWith('../') ||
+        normalizedReference.contains('/../')) {
+      throw StateError('parent traversal not allowed: $normalizedReference');
+    }
+
+    final isAbsolute = _looksAbsolutePath(normalizedReference);
+    if (isAbsolute) {
+      final sourcePath = path.normalize(normalizedReference);
+      final fileName = path.basename(sourcePath);
+      if (fileName.trim().isEmpty) {
+        throw StateError('absolute reference has no file name');
+      }
+      return _ExportResourceSpec(
+        normalizedReference: normalizedReference,
+        sourcePath: sourcePath,
+        archiveRelativePath: 'assets/$fileName',
+      );
+    }
+
+    final sourcePath = path.joinAll(<String>[
+      chartDirectory,
+      ...path.posix.split(normalizedReference),
+    ]);
+    return _ExportResourceSpec(
+      normalizedReference: normalizedReference,
+      sourcePath: sourcePath,
+      archiveRelativePath: normalizedReference,
+    );
+  }
+
   CoreMetadataSnapshot _rewriteMetadataReferences(
     CoreMetadataSnapshot metadata,
     Map<String, String> rewriteMapping,
@@ -1047,9 +1231,6 @@ class ChartDocumentController extends ChangeNotifier {
     normalized = path.posix.normalize(normalized);
     if (normalized == '.' || normalized.isEmpty) {
       return null;
-    }
-    if (normalized.startsWith('/')) {
-      normalized = normalized.substring(1);
     }
     return normalized;
   }

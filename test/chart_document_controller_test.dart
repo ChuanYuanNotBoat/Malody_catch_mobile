@@ -340,4 +340,101 @@ void main() {
       root.deleteSync(recursive: true);
     },
   );
+
+  test(
+    'controller exports mcz with mc and referenced resources only',
+    () async {
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+      );
+      controller.openSession();
+      controller.updateMetadata(
+        controller.metadata.copyWith(
+          title: 'ExportTarget',
+          artist: 'Exporter',
+          difficulty: 'Hard',
+          audioFile: 'audio/song.ogg',
+          backgroundFile: 'bg/cover.png',
+        ),
+      );
+      controller.addSoundNote(
+        beat: const CoreBeat(measure: 1, numerator: 0, denominator: 1),
+        sound: 'sfx/hit.wav',
+      );
+
+      final root = Directory.systemTemp.createTempSync('mobile_mcz_export_ok');
+      final chartPath = path.join(root.path, 'export_case.mc');
+      final saved = controller.saveChart(path: chartPath);
+      expect(saved, isTrue);
+
+      final audioFile = File(path.join(root.path, 'audio', 'song.ogg'));
+      audioFile.parent.createSync(recursive: true);
+      audioFile.writeAsStringSync('audio');
+      final backgroundFile = File(path.join(root.path, 'bg', 'cover.png'));
+      backgroundFile.parent.createSync(recursive: true);
+      backgroundFile.writeAsStringSync('bg');
+      final sfxFile = File(path.join(root.path, 'sfx', 'hit.wav'));
+      sfxFile.parent.createSync(recursive: true);
+      sfxFile.writeAsStringSync('hit');
+      File(path.join(root.path, 'unused.bin')).writeAsStringSync('unused');
+
+      final archive = FakeChartArchive();
+      final workspace = FakeChartWorkspace(root.path);
+      final outputPath = path.join(root.path, 'export_case.mcz');
+
+      final ok = await controller.exportMczFile(
+        outputPath: outputPath,
+        archive: archive,
+        workspace: workspace,
+      );
+
+      expect(ok, isTrue);
+      expect(archive.lastCreateOutputPath, outputPath);
+      final archivePaths =
+          archive.lastCreateFiles?.map((entry) => entry.archivePath).toSet() ??
+          <String>{};
+      expect(archivePaths.contains('0/export_case.mc'), isTrue);
+      expect(archivePaths.contains('0/audio/song.ogg'), isTrue);
+      expect(archivePaths.contains('0/bg/cover.png'), isTrue);
+      expect(archivePaths.contains('0/sfx/hit.wav'), isTrue);
+      expect(archivePaths.contains('0/unused.bin'), isFalse);
+
+      root.deleteSync(recursive: true);
+    },
+  );
+
+  test('controller export mcz fails on missing resource', () async {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'ExportMissing',
+        artist: 'Exporter',
+        difficulty: 'Hard',
+        audioFile: 'audio/missing.ogg',
+      ),
+    );
+
+    final root = Directory.systemTemp.createTempSync(
+      'mobile_mcz_export_missing',
+    );
+    final chartPath = path.join(root.path, 'export_missing.mc');
+    controller.saveChart(path: chartPath);
+
+    final archive = FakeChartArchive();
+    final workspace = FakeChartWorkspace(root.path);
+    final ok = await controller.exportMczFile(
+      outputPath: path.join(root.path, 'export_missing.mcz'),
+      archive: archive,
+      workspace: workspace,
+    );
+
+    expect(ok, isFalse);
+    expect(controller.lastError, contains('mcz_export_resource_missing'));
+    expect(archive.lastCreateFiles, isNull);
+
+    root.deleteSync(recursive: true);
+  });
 }

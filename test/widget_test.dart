@@ -65,6 +65,7 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Open Session'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Open .mc'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Save .mc'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Export .mcz'), findsOneWidget);
     expect(find.byType(Scaffold), findsOneWidget);
   });
 
@@ -290,5 +291,100 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.lastError, contains('save_directory_not_selected'));
+  });
+
+  testWidgets('Export .mcz picks directory then file name', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    controller.addNormalNote(measure: 1, numerator: 0, denominator: 1, x: 220);
+
+    final root = Directory.systemTemp.createTempSync('mobile_export_widget');
+    final sourceChartPath = '${root.path}${Platform.pathSeparator}source.mc';
+    controller.saveChart(path: sourceChartPath);
+
+    final archive = FakeChartArchive();
+    final workspace = FakeChartWorkspace(root.path);
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        filePicker: FakeChartFilePicker(saveDirectory: root.path),
+        chartArchive: archive,
+        chartWorkspace: workspace,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final exportButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Export .mcz'),
+    );
+    await tester.runAsync(() async {
+      exportButton.onPressed!.call();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('Export File Name'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField).last, 'bundle_out');
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'OK'));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await tester.pumpAndSettle();
+
+    final outputPath = '${root.path}${Platform.pathSeparator}bundle_out.mcz';
+    expect(archive.lastCreateOutputPath, outputPath);
+    expect(
+      archive.lastCreateFiles?.any(
+            (entry) => entry.archivePath == '0/source.mc',
+          ) ??
+          false,
+      isTrue,
+    );
+
+    root.deleteSync(recursive: true);
+  });
+
+  testWidgets('Export .mcz reports directory cancel', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    final root = Directory.systemTemp.createTempSync('mcz_export_cancel');
+    final sourcePath = '${root.path}${Platform.pathSeparator}export_source.mc';
+    controller.saveChart(path: sourcePath);
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        filePicker: FakeChartFilePicker(saveDirectory: null),
+        chartArchive: FakeChartArchive(),
+        chartWorkspace: FakeChartWorkspace(root.path),
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Export .mcz'));
+    await tester.pumpAndSettle();
+
+    expect(controller.lastError, contains('mcz_export_directory_not_selected'));
+
+    root.deleteSync(recursive: true);
   });
 }
