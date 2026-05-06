@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as path;
 
 import 'core_session.dart';
 import 'mc_chart_io.dart';
@@ -26,6 +27,18 @@ class MczChartCandidate {
 
 typedef MczChartSelectionResolver =
     Future<String?> Function(List<MczChartCandidate> charts);
+
+class _ResolvedResourcePath {
+  const _ResolvedResourcePath({
+    required this.normalizedReference,
+    required this.sourcePath,
+    required this.relativePath,
+  });
+
+  final String normalizedReference;
+  final String sourcePath;
+  final String relativePath;
+}
 
 class _DraftState {
   const _DraftState({
@@ -302,11 +315,182 @@ class ChartDocumentController extends ChangeNotifier {
     required ChartWorkspacePort workspace,
     required MczChartSelectionResolver chooseChart,
   }) async {
-    reportExternalError(
-      event: '${_mczImportEventPrefix}failed',
-      message: '${_mczImportEventPrefix}not_implemented',
-    );
-    return false;
+    final sourcePath = mczPath.trim();
+    if (!sourcePath.toLowerCase().endsWith('.mcz')) {
+      reportExternalError(
+        event: '${_mczImportEventPrefix}failed',
+        message: '${_mczImportEventPrefix}unsupported_extension',
+      );
+      return false;
+    }
+    if (!File(sourcePath).existsSync()) {
+      reportExternalError(
+        event: '${_mczImportEventPrefix}failed',
+        message: '${_mczImportEventPrefix}file_not_found:$sourcePath',
+      );
+      return false;
+    }
+
+    String? tempDirectoryPath;
+    try {
+      tempDirectoryPath = await workspace.createImportTempDirectory();
+      final extractedFiles = await archive.extractMcz(
+        mczPath: sourcePath,
+        targetDirectoryPath: tempDirectoryPath,
+      );
+
+      final mcFiles =
+          extractedFiles
+              .where((entry) => entry.toLowerCase().endsWith('.mc'))
+              .toList()
+            ..sort();
+      if (mcFiles.isEmpty) {
+        reportExternalError(
+          event: '${_mczImportEventPrefix}failed',
+          message: '${_mczImportEventPrefix}mc_not_found',
+        );
+        return false;
+      }
+
+      final parsedByPath = <String, ParsedMcChart>{};
+      final candidates = <MczChartCandidate>[];
+      for (final mcFilePath in mcFiles) {
+        try {
+          final parsed = McChartIo.parse(File(mcFilePath).readAsStringSync());
+          parsedByPath[mcFilePath] = parsed;
+          candidates.add(
+            MczChartCandidate(
+              mcPath: mcFilePath,
+              relativePath: path.relative(mcFilePath, from: tempDirectoryPath),
+              difficulty: parsed.metadata.difficulty.trim().isEmpty
+                  ? path.basenameWithoutExtension(mcFilePath)
+                  : parsed.metadata.difficulty,
+            ),
+          );
+        } catch (_) {
+          // Ignore unparseable files and continue scanning the archive.
+        }
+      }
+
+      if (candidates.isEmpty) {
+        reportExternalError(
+          event: '${_mczImportEventPrefix}failed',
+          message: '${_mczImportEventPrefix}parse_failed',
+        );
+        return false;
+      }
+
+      String selectedPath = candidates.first.mcPath;
+      if (candidates.length > 1) {
+        final selected = await chooseChart(candidates);
+        if (selected == null || selected.trim().isEmpty) {
+          reportExternalError(
+            event: '${_mczImportEventPrefix}cancelled',
+            message: '${_mczImportEventPrefix}chart_not_selected',
+          );
+          return false;
+        }
+        selectedPath = selected.trim();
+      }
+
+      final selectedChart = parsedByPath[selectedPath];
+      if (selectedChart == null) {
+        reportExternalError(
+          event: '${_mczImportEventPrefix}failed',
+          message: '${_mczImportEventPrefix}chart_selection_invalid',
+        );
+        return false;
+      }
+
+      final selectedChartDirectory = File(selectedPath).parent.path;
+      final resolvedResources = <_ResolvedResourcePath>[];
+      final seen = <String>{};
+
+      for (final ref in _collectReferencedResourcePaths(
+        metadata: selectedChart.metadata,
+        notes: selectedChart.notes,
+      )) {
+        final resolved = _resolveImportResourcePath(
+          chartDirectory: selectedChartDirectory,
+          reference: ref,
+        );
+        if (!seen.add(resolved.normalizedReference)) {
+          continue;
+        }
+        if (!workspace.fileExists(resolved.sourcePath)) {
+          reportExternalError(
+            event: '${_mczImportEventPrefix}failed',
+            message:
+                '${_mczImportEventPrefix}resource_missing:${resolved.relativePath}',
+          );
+          return false;
+        }
+        resolvedResources.add(resolved);
+      }
+
+      final workspaceLocation = await workspace.createChartWorkspace(
+        suggestedStem: _buildWorkspaceStem(selectedChart, selectedPath),
+        chartFileName: path.basename(selectedPath),
+      );
+
+      final rewriteMapping = <String, String>{};
+      for (final resource in resolvedResources) {
+        final targetPath = path.joinAll(<String>[
+          workspaceLocation.rootDirectoryPath,
+          ...path.posix.split(resource.relativePath),
+        ]);
+        await workspace.copyFile(
+          sourcePath: resource.sourcePath,
+          targetPath: targetPath,
+        );
+        rewriteMapping[resource.normalizedReference] = resource.relativePath;
+      }
+
+      final rewrittenMetadata = _rewriteMetadataReferences(
+        selectedChart.metadata,
+        rewriteMapping,
+      );
+      final rewrittenNotes = _rewriteNoteReferences(
+        selectedChart.notes,
+        rewriteMapping,
+      );
+      final chartContent = McChartIo.encode(
+        metadata: rewrittenMetadata,
+        bpms: selectedChart.bpms,
+        notes: rewrittenNotes,
+      );
+
+      await workspace.writeTextFile(
+        targetPath: workspaceLocation.chartFilePath,
+        content: chartContent,
+      );
+
+      final opened = openChartFile(workspaceLocation.chartFilePath);
+      if (!opened) {
+        reportExternalError(
+          event: '${_mczImportEventPrefix}failed',
+          message: '${_mczImportEventPrefix}open_failed:$lastError',
+        );
+        return false;
+      }
+
+      _lastEventLog = '${_mczImportEventPrefix}ok';
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      reportExternalError(
+        event: '${_mczImportEventPrefix}failed',
+        message: '${_mczImportEventPrefix}exception:$e',
+      );
+      return false;
+    } finally {
+      if (tempDirectoryPath != null && tempDirectoryPath.isNotEmpty) {
+        await workspace.deleteDirectory(tempDirectoryPath);
+      }
+    }
   }
 
   Future<bool> exportMczFile({
@@ -736,6 +920,145 @@ class ChartDocumentController extends ChangeNotifier {
       }
     }
     return true;
+  }
+
+  String _buildWorkspaceStem(ParsedMcChart chart, String selectedPath) {
+    final title = chart.metadata.title.trim();
+    if (title.isNotEmpty) {
+      return title;
+    }
+    return path.basenameWithoutExtension(selectedPath);
+  }
+
+  Set<String> _collectReferencedResourcePaths({
+    required CoreMetadataSnapshot metadata,
+    required List<CoreNoteSnapshot> notes,
+  }) {
+    final refs = <String>{};
+    final audio = _normalizeResourceReference(metadata.audioFile);
+    if (audio != null) {
+      refs.add(audio);
+    }
+    final background = _normalizeResourceReference(metadata.backgroundFile);
+    if (background != null) {
+      refs.add(background);
+    }
+    for (final note in notes) {
+      if (note.type != 1) {
+        continue;
+      }
+      final sound = _normalizeResourceReference(note.sound);
+      if (sound != null) {
+        refs.add(sound);
+      }
+    }
+    return refs;
+  }
+
+  _ResolvedResourcePath _resolveImportResourcePath({
+    required String chartDirectory,
+    required String reference,
+  }) {
+    final normalizedRef = _normalizeResourceReference(reference);
+    if (normalizedRef == null) {
+      throw StateError('resource reference empty');
+    }
+    if (_looksAbsolutePath(normalizedRef)) {
+      throw StateError('absolute reference not allowed: $reference');
+    }
+    if (normalizedRef.startsWith('../') || normalizedRef.contains('/../')) {
+      throw StateError('parent traversal not allowed: $reference');
+    }
+    final sourcePath = path.joinAll(<String>[
+      chartDirectory,
+      ...path.posix.split(normalizedRef),
+    ]);
+    return _ResolvedResourcePath(
+      normalizedReference: normalizedRef,
+      sourcePath: sourcePath,
+      relativePath: normalizedRef,
+    );
+  }
+
+  CoreMetadataSnapshot _rewriteMetadataReferences(
+    CoreMetadataSnapshot metadata,
+    Map<String, String> rewriteMapping,
+  ) {
+    final nextAudio = _rewriteResourceReference(
+      metadata.audioFile,
+      rewriteMapping,
+    );
+    final nextBackground = _rewriteResourceReference(
+      metadata.backgroundFile,
+      rewriteMapping,
+    );
+    return metadata.copyWith(
+      audioFile: nextAudio,
+      backgroundFile: nextBackground,
+    );
+  }
+
+  List<CoreNoteSnapshot> _rewriteNoteReferences(
+    List<CoreNoteSnapshot> notes,
+    Map<String, String> rewriteMapping,
+  ) {
+    return notes.map((note) {
+      if (note.type != 1 || note.sound.trim().isEmpty) {
+        return note;
+      }
+      final rewrittenSound = _rewriteResourceReference(
+        note.sound,
+        rewriteMapping,
+      );
+      return CoreNoteSnapshot(
+        id: note.id,
+        type: note.type,
+        beat: note.beat,
+        endBeat: note.endBeat,
+        x: note.x,
+        sound: rewrittenSound,
+        volume: note.volume,
+        offsetMs: note.offsetMs,
+      );
+    }).toList();
+  }
+
+  String _rewriteResourceReference(
+    String rawValue,
+    Map<String, String> rewriteMapping,
+  ) {
+    final normalized = _normalizeResourceReference(rawValue);
+    if (normalized == null) {
+      return rawValue;
+    }
+    return rewriteMapping[normalized] ?? rawValue;
+  }
+
+  String? _normalizeResourceReference(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+
+    var normalized = trimmed.replaceAll('\\', '/');
+    while (normalized.startsWith('./')) {
+      normalized = normalized.substring(2);
+    }
+    normalized = path.posix.normalize(normalized);
+    if (normalized == '.' || normalized.isEmpty) {
+      return null;
+    }
+    if (normalized.startsWith('/')) {
+      normalized = normalized.substring(1);
+    }
+    return normalized;
+  }
+
+  bool _looksAbsolutePath(String rawPath) {
+    if (rawPath.startsWith('/') || rawPath.startsWith('\\')) {
+      return true;
+    }
+    return RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(rawPath);
   }
 
   void _commitMutation(

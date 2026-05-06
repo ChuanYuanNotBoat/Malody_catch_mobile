@@ -1,9 +1,12 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:malody_catch_mobile/core/chart_document_controller.dart';
+import 'package:malody_catch_mobile/core/mc_chart_io.dart';
 import 'package:malody_catch_mobile/core/native_core.dart';
+import 'package:path/path.dart' as path;
 
+import 'support/fake_chart_io_ports.dart';
 import 'support/fake_core_session.dart';
 
 void main() {
@@ -107,4 +110,234 @@ void main() {
     expect(saved, isFalse);
     expect(controller.lastError, contains('mcz_fallback_required'));
   });
+
+  test(
+    'controller imports mcz into workspace and rewrites resource paths',
+    () async {
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+      );
+
+      final root = Directory.systemTemp.createTempSync('mobile_mcz_import_ok');
+      final mczPath = path.join(root.path, 'demo.mcz');
+      File(mczPath).writeAsBytesSync(const <int>[1, 2, 3]);
+
+      final archive = FakeChartArchive(
+        onExtract: (source, target) async {
+          final chartPath = path.join(target, '0', 'hard.mc');
+          final chartFile = File(chartPath);
+          chartFile.parent.createSync(recursive: true);
+          chartFile.writeAsStringSync(
+            McChartIo.encode(
+              metadata: CoreMetadataSnapshot.empty().copyWith(
+                title: 'ImportedChart',
+                artist: 'Importer',
+                difficulty: 'Hard',
+                audioFile: 'audio/song.ogg',
+                backgroundFile: 'bg/cover.png',
+              ),
+              bpms: const <CoreBpmSnapshot>[
+                CoreBpmSnapshot(
+                  beat: CoreBeat(measure: 0, numerator: 0, denominator: 1),
+                  bpm: 120,
+                ),
+              ],
+              notes: const <CoreNoteSnapshot>[
+                CoreNoteSnapshot(
+                  id: 'n0',
+                  type: 1,
+                  beat: CoreBeat(measure: 1, numerator: 0, denominator: 1),
+                  endBeat: CoreBeat(measure: 1, numerator: 0, denominator: 1),
+                  x: -1,
+                  sound: 'sfx/hit.wav',
+                  volume: 100,
+                  offsetMs: 0,
+                ),
+              ],
+            ),
+          );
+          final audioFile = File(path.join(target, '0', 'audio', 'song.ogg'));
+          audioFile.parent.createSync(recursive: true);
+          audioFile.writeAsStringSync('audio');
+          final backgroundFile = File(
+            path.join(target, '0', 'bg', 'cover.png'),
+          );
+          backgroundFile.parent.createSync(recursive: true);
+          backgroundFile.writeAsStringSync('bg');
+          final sfxFile = File(path.join(target, '0', 'sfx', 'hit.wav'));
+          sfxFile.parent.createSync(recursive: true);
+          sfxFile.writeAsStringSync('sfx');
+          return <String>[
+            chartPath,
+            path.join(target, '0', 'audio', 'song.ogg'),
+            path.join(target, '0', 'bg', 'cover.png'),
+            path.join(target, '0', 'sfx', 'hit.wav'),
+          ];
+        },
+      );
+      final workspace = FakeChartWorkspace(root.path);
+
+      final imported = await controller.importMczFile(
+        mczPath: mczPath,
+        archive: archive,
+        workspace: workspace,
+        chooseChart: (charts) async => charts.first.mcPath,
+      );
+
+      expect(imported, isTrue);
+      expect(controller.lastEventLog, 'mcz_import_ok');
+      expect(controller.currentFilePath, isNotNull);
+      expect(File(controller.currentFilePath!).existsSync(), isTrue);
+
+      final importedRoot = File(controller.currentFilePath!).parent.path;
+      expect(
+        File(path.join(importedRoot, 'audio', 'song.ogg')).existsSync(),
+        isTrue,
+      );
+      expect(
+        File(path.join(importedRoot, 'bg', 'cover.png')).existsSync(),
+        isTrue,
+      );
+      expect(
+        File(path.join(importedRoot, 'sfx', 'hit.wav')).existsSync(),
+        isTrue,
+      );
+
+      final mc = McChartIo.parse(
+        File(controller.currentFilePath!).readAsStringSync(),
+      );
+      expect(mc.metadata.audioFile, 'audio/song.ogg');
+      expect(mc.metadata.backgroundFile, 'bg/cover.png');
+      expect(
+        mc.notes.where((note) => note.type == 1).first.sound,
+        'sfx/hit.wav',
+      );
+
+      root.deleteSync(recursive: true);
+    },
+  );
+
+  test('controller import mcz supports multi-chart selection', () async {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+
+    final root = Directory.systemTemp.createTempSync('mobile_mcz_multi');
+    final mczPath = path.join(root.path, 'multi.mcz');
+    File(mczPath).writeAsStringSync('x');
+
+    final archive = FakeChartArchive(
+      onExtract: (source, target) async {
+        final easy = path.join(target, '0', 'easy.mc');
+        final hard = path.join(target, '0', 'hard.mc');
+        final easyFile = File(easy);
+        easyFile.parent.createSync(recursive: true);
+        easyFile.writeAsStringSync(
+          McChartIo.encode(
+            metadata: CoreMetadataSnapshot.empty().copyWith(
+              title: 'EasyOne',
+              artist: 'A',
+              difficulty: 'Easy',
+              audioFile: 'song.ogg',
+            ),
+            bpms: const <CoreBpmSnapshot>[
+              CoreBpmSnapshot(
+                beat: CoreBeat(measure: 0, numerator: 0, denominator: 1),
+                bpm: 120,
+              ),
+            ],
+            notes: const <CoreNoteSnapshot>[],
+          ),
+        );
+        final hardFile = File(hard);
+        hardFile.writeAsStringSync(
+          McChartIo.encode(
+            metadata: CoreMetadataSnapshot.empty().copyWith(
+              title: 'HardOne',
+              artist: 'A',
+              difficulty: 'Hard',
+              audioFile: 'song.ogg',
+            ),
+            bpms: const <CoreBpmSnapshot>[
+              CoreBpmSnapshot(
+                beat: CoreBeat(measure: 0, numerator: 0, denominator: 1),
+                bpm: 120,
+              ),
+            ],
+            notes: const <CoreNoteSnapshot>[],
+          ),
+        );
+        File(path.join(target, '0', 'song.ogg')).writeAsStringSync('audio');
+        return <String>[easy, hard];
+      },
+    );
+    final workspace = FakeChartWorkspace(root.path);
+
+    final imported = await controller.importMczFile(
+      mczPath: mczPath,
+      archive: archive,
+      workspace: workspace,
+      chooseChart: (charts) async => charts
+          .firstWhere((candidate) => candidate.difficulty == 'Hard')
+          .mcPath,
+    );
+
+    expect(imported, isTrue);
+    expect(controller.metadata.title, 'HardOne');
+    expect(controller.metadata.difficulty, 'Hard');
+
+    root.deleteSync(recursive: true);
+  });
+
+  test(
+    'controller import mcz fails when referenced resource is missing',
+    () async {
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+      );
+
+      final root = Directory.systemTemp.createTempSync('mobile_mcz_missing');
+      final mczPath = path.join(root.path, 'missing.mcz');
+      File(mczPath).writeAsStringSync('x');
+
+      final archive = FakeChartArchive(
+        onExtract: (source, target) async {
+          final chartPath = path.join(target, '0', 'missing.mc');
+          final chartFile = File(chartPath);
+          chartFile.parent.createSync(recursive: true);
+          chartFile.writeAsStringSync(
+            McChartIo.encode(
+              metadata: CoreMetadataSnapshot.empty().copyWith(
+                title: 'MissingRef',
+                artist: 'A',
+                difficulty: 'Normal',
+                audioFile: 'audio/not_found.ogg',
+              ),
+              bpms: const <CoreBpmSnapshot>[
+                CoreBpmSnapshot(
+                  beat: CoreBeat(measure: 0, numerator: 0, denominator: 1),
+                  bpm: 120,
+                ),
+              ],
+              notes: const <CoreNoteSnapshot>[],
+            ),
+          );
+          return <String>[chartPath];
+        },
+      );
+      final workspace = FakeChartWorkspace(root.path);
+
+      final imported = await controller.importMczFile(
+        mczPath: mczPath,
+        archive: archive,
+        workspace: workspace,
+        chooseChart: (charts) async => charts.first.mcPath,
+      );
+
+      expect(imported, isFalse);
+      expect(controller.lastError, contains('mcz_import_resource_missing'));
+
+      root.deleteSync(recursive: true);
+    },
+  );
 }

@@ -8,6 +8,7 @@ import 'package:malody_catch_mobile/core/native_core.dart';
 import 'package:malody_catch_mobile/io/chart_file_picker.dart';
 import 'package:malody_catch_mobile/main.dart';
 
+import 'support/fake_chart_io_ports.dart';
 import 'support/fake_core_session.dart';
 
 class FakeChartFilePicker implements ChartFilePickerPort {
@@ -22,9 +23,12 @@ class FakeChartFilePicker implements ChartFilePickerPort {
   final String? saveDirectory;
   final bool throwOnOpen;
   final bool throwOnSaveDirectory;
+  int openCallCount = 0;
+  int saveDirectoryCallCount = 0;
 
   @override
   Future<String?> pickChartToOpen() async {
+    openCallCount += 1;
     if (throwOnOpen) {
       throw StateError('open picker unavailable');
     }
@@ -33,6 +37,7 @@ class FakeChartFilePicker implements ChartFilePickerPort {
 
   @override
   Future<String?> pickDirectoryForSave() async {
+    saveDirectoryCallCount += 1;
     if (throwOnSaveDirectory) {
       throw StateError('save picker unavailable');
     }
@@ -115,7 +120,7 @@ void main() {
     tempDir.deleteSync(recursive: true);
   });
 
-  testWidgets('Open .mc keeps mcz fallback behavior', (
+  testWidgets('Open .mc with mcz path routes to mcz import errors', (
     WidgetTester tester,
   ) async {
     final controller = ChartDocumentController(
@@ -135,7 +140,77 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Open .mc'));
     await tester.pumpAndSettle();
 
-    expect(controller.lastError, contains('mcz_fallback_required'));
+    expect(controller.lastError, contains('mcz_import_file_not_found'));
+  });
+
+  testWidgets('Open .mc imports mcz via archive/workspace flow', (
+    WidgetTester tester,
+  ) async {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    final root = Directory.systemTemp.createTempSync('widget_mcz_import');
+    final mczPath = '${root.path}${Platform.pathSeparator}widget_import.mcz';
+    File(mczPath).writeAsStringSync('x');
+    final picker = FakeChartFilePicker(openPath: mczPath);
+
+    final archive = FakeChartArchive(
+      onExtract: (source, target) async {
+        final chartPath =
+            '$target${Platform.pathSeparator}0${Platform.pathSeparator}main.mc';
+        final chartFile = File(chartPath);
+        chartFile.parent.createSync(recursive: true);
+        chartFile.writeAsStringSync(
+          McChartIo.encode(
+            metadata: CoreMetadataSnapshot.empty().copyWith(
+              title: 'WidgetMcz',
+              artist: 'Tester',
+              difficulty: 'Normal',
+              audioFile: 'song.ogg',
+            ),
+            bpms: const <CoreBpmSnapshot>[
+              CoreBpmSnapshot(
+                beat: CoreBeat(measure: 0, numerator: 0, denominator: 1),
+                bpm: 120,
+              ),
+            ],
+            notes: const <CoreNoteSnapshot>[],
+          ),
+        );
+        final soundFile = File(
+          '$target${Platform.pathSeparator}0${Platform.pathSeparator}song.ogg',
+        );
+        soundFile.writeAsStringSync('audio');
+        return <String>[chartPath];
+      },
+    );
+    final workspace = FakeChartWorkspace(root.path);
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        filePicker: picker,
+        chartArchive: archive,
+        chartWorkspace: workspace,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final openButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Open .mc'),
+    );
+    expect(openButton.onPressed, isNotNull);
+
+    await tester.runAsync(() async {
+      openButton.onPressed!.call();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await tester.pumpAndSettle();
+    expect(picker.openCallCount, 1);
+    expect(archive.lastExtractMczPath, mczPath);
+
+    root.deleteSync(recursive: true);
   });
 
   testWidgets('Open .mc reports picker exception', (WidgetTester tester) async {

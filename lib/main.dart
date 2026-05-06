@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 import 'core/chart_document_controller.dart';
 import 'core/native_core.dart';
+import 'io/chart_archive.dart';
 import 'io/chart_file_picker.dart';
+import 'io/chart_workspace.dart';
 import 'ui/simple_chart_canvas.dart';
 import 'ui/simple_density_bar.dart';
 
@@ -17,12 +19,16 @@ class MalodyCatchMobileApp extends StatelessWidget {
     super.key,
     this.controller,
     this.filePicker,
+    this.chartArchive,
+    this.chartWorkspace,
     this.runStartupSelfCheckOnInit = true,
     this.forceStartupReady,
   });
 
   final ChartDocumentController? controller;
   final ChartFilePickerPort? filePicker;
+  final ChartArchivePort? chartArchive;
+  final ChartWorkspacePort? chartWorkspace;
   final bool runStartupSelfCheckOnInit;
   final bool? forceStartupReady;
 
@@ -36,6 +42,8 @@ class MalodyCatchMobileApp extends StatelessWidget {
       home: MobileEditorPage(
         controller: controller,
         filePicker: filePicker,
+        chartArchive: chartArchive,
+        chartWorkspace: chartWorkspace,
         runStartupSelfCheckOnInit: runStartupSelfCheckOnInit,
         forceStartupReady: forceStartupReady,
       ),
@@ -48,12 +56,16 @@ class MobileEditorPage extends StatefulWidget {
     super.key,
     this.controller,
     this.filePicker,
+    this.chartArchive,
+    this.chartWorkspace,
     this.runStartupSelfCheckOnInit = true,
     this.forceStartupReady,
   });
 
   final ChartDocumentController? controller;
   final ChartFilePickerPort? filePicker;
+  final ChartArchivePort? chartArchive;
+  final ChartWorkspacePort? chartWorkspace;
   final bool runStartupSelfCheckOnInit;
   final bool? forceStartupReady;
 
@@ -65,6 +77,8 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     with WidgetsBindingObserver {
   late final ChartDocumentController _controller;
   late final ChartFilePickerPort _filePicker;
+  late final ChartArchivePort _chartArchive;
+  late final ChartWorkspacePort _chartWorkspace;
   late final bool _ownsController;
 
   final TextEditingController _titleCtrl = TextEditingController();
@@ -86,6 +100,8 @@ class _MobileEditorPageState extends State<MobileEditorPage>
       _ownsController = false;
     }
     _filePicker = widget.filePicker ?? const ChartFilePicker();
+    _chartArchive = widget.chartArchive ?? const ChartArchive();
+    _chartWorkspace = widget.chartWorkspace ?? const ChartWorkspace();
 
     _controller.addListener(_onControllerChanged);
     if (widget.runStartupSelfCheckOnInit) {
@@ -133,13 +149,57 @@ class _MobileEditorPageState extends State<MobileEditorPage>
         );
         return;
       }
-      _controller.openChartFile(path.trim());
+      final normalizedPath = path.trim();
+      if (normalizedPath.toLowerCase().endsWith('.mcz')) {
+        await _controller.importMczFile(
+          mczPath: normalizedPath,
+          archive: _chartArchive,
+          workspace: _chartWorkspace,
+          chooseChart: _chooseMczChart,
+        );
+        return;
+      }
+      _controller.openChartFile(normalizedPath);
     } catch (e) {
       _controller.reportExternalError(
         event: 'open_chart_failed',
         message: 'open_picker_exception:$e',
       );
     }
+  }
+
+  Future<String?> _chooseMczChart(List<MczChartCandidate> charts) async {
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Select Chart'),
+          content: SizedBox(
+            width: 420,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: charts.length,
+              itemBuilder: (context, index) {
+                final candidate = charts[index];
+                return ListTile(
+                  dense: true,
+                  title: Text(candidate.difficulty),
+                  subtitle: Text(candidate.relativePath),
+                  onTap: () =>
+                      Navigator.of(dialogContext).pop(candidate.mcPath),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _saveChart() async {
@@ -191,8 +251,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
             autofocus: true,
             decoration: const InputDecoration(hintText: 'chart_name.mc'),
             onChanged: (value) => candidate = value,
-            onFieldSubmitted: (value) =>
-                Navigator.of(dialogContext).pop(value),
+            onFieldSubmitted: (value) => Navigator.of(dialogContext).pop(value),
           ),
           actions: [
             TextButton(
