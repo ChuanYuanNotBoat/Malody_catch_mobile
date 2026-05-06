@@ -6,6 +6,7 @@ import 'package:malody_catch_mobile/core/mc_chart_io.dart';
 import 'package:malody_catch_mobile/core/native_core.dart';
 import 'package:path/path.dart' as path;
 
+import 'support/fake_chart_audio.dart';
 import 'support/fake_chart_io_ports.dart';
 import 'support/fake_core_session.dart';
 
@@ -109,6 +110,138 @@ void main() {
     final saved = controller.saveChart(path: r'C:\tmp\fallback_case.mcz');
     expect(saved, isFalse);
     expect(controller.lastError, contains('mcz_fallback_required'));
+  });
+
+  test(
+    'controller supports audio playback lifecycle and beat seek mapping',
+    () async {
+      late FakeChartAudio fakeAudio;
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+        audioFactory: () {
+          fakeAudio = FakeChartAudio(
+            initialDuration: const Duration(seconds: 90),
+          );
+          return fakeAudio;
+        },
+      );
+
+      controller.openSession();
+      controller.updateMetadata(
+        controller.metadata.copyWith(
+          title: 'PlaybackCase',
+          audioFile: 'audio/song.ogg',
+          offsetMs: 200,
+        ),
+      );
+      controller.addBpmEntry(
+        beat: const CoreBeat(measure: 4, numerator: 0, denominator: 1),
+        bpm: 240,
+      );
+
+      final root = Directory.systemTemp.createTempSync('mobile_audio_case');
+      final chartPath = path.join(root.path, 'playback_case.mc');
+      controller.saveChart(path: chartPath);
+      final audioPath = path.join(root.path, 'audio', 'song.ogg');
+      final audioFile = File(audioPath);
+      audioFile.parent.createSync(recursive: true);
+      audioFile.writeAsStringSync('audio-bytes');
+
+      final prepared = await controller.prepareAudioFromCurrentChart();
+      expect(prepared, isTrue);
+      expect(controller.playbackStatus, PlaybackStatus.ready);
+      expect(fakeAudio.loadedPath, audioPath);
+
+      final played = await controller.play();
+      expect(played, isTrue);
+      expect(controller.playbackStatus, PlaybackStatus.playing);
+
+      final seeked = await controller.seekToBeat(4.0);
+      expect(seeked, isTrue);
+      expect(controller.playheadMs, 2200);
+      expect(controller.playheadBeat, closeTo(4.0, 0.02));
+
+      final rateSet = await controller.setPlaybackRate(1.25);
+      expect(rateSet, isTrue);
+      expect(controller.playbackRate, 1.25);
+      expect(fakeAudio.currentRate, 1.25);
+
+      fakeAudio.emitPosition(const Duration(milliseconds: 2450));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.playheadBeat, closeTo(5.0, 0.05));
+
+      final paused = await controller.pause();
+      expect(paused, isTrue);
+      expect(controller.playbackStatus, PlaybackStatus.paused);
+
+      final stopped = await controller.stopAndReset();
+      expect(stopped, isTrue);
+      expect(controller.playheadMs, 0);
+
+      root.deleteSync(recursive: true);
+    },
+  );
+
+  test('controller playback fails when audio source is missing', () async {
+    FakeChartAudio? fakeAudio;
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () {
+        fakeAudio = FakeChartAudio();
+        return fakeAudio!;
+      },
+    );
+
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'PlaybackMissing',
+        audioFile: 'audio/not_exists.ogg',
+      ),
+    );
+
+    final root = Directory.systemTemp.createTempSync('mobile_audio_missing');
+    final chartPath = path.join(root.path, 'missing_audio_case.mc');
+    controller.saveChart(path: chartPath);
+
+    final prepared = await controller.prepareAudioFromCurrentChart();
+    expect(prepared, isFalse);
+    expect(controller.playbackStatus, PlaybackStatus.error);
+    expect(
+      controller.lastError,
+      contains('audio_playback_audio_source_missing'),
+    );
+    expect(fakeAudio, isNull);
+
+    root.deleteSync(recursive: true);
+  });
+
+  test('controller playback accepts absolute audio path', () async {
+    late FakeChartAudio fakeAudio;
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () {
+        fakeAudio = FakeChartAudio();
+        return fakeAudio;
+      },
+    );
+
+    final root = Directory.systemTemp.createTempSync('mobile_audio_absolute');
+    final audioPath = path.join(root.path, 'absolute_song.ogg');
+    File(audioPath).writeAsStringSync('audio');
+
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(title: 'AbsCase', audioFile: audioPath),
+    );
+    final chartPath = path.join(root.path, 'abs_case.mc');
+    controller.saveChart(path: chartPath);
+
+    final prepared = await controller.prepareAudioFromCurrentChart();
+    expect(prepared, isTrue);
+    expect(fakeAudio.loadedPath, audioPath);
+
+    root.deleteSync(recursive: true);
   });
 
   test(

@@ -1,17 +1,22 @@
 import 'dart:collection';
 import 'dart:io';
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 
+import 'beat_time_mapper.dart';
 import 'core_session.dart';
 import 'mc_chart_io.dart';
 import 'native_core.dart';
 import '../io/chart_archive.dart';
+import '../io/chart_audio.dart';
 import '../io/chart_workspace.dart';
 
 enum EditorMode { placeNormal, placeRain, delete, select, move }
+
+enum PlaybackStatus { idle, loading, ready, playing, paused, error }
 
 class MczChartCandidate {
   const MczChartCandidate({
@@ -27,6 +32,8 @@ class MczChartCandidate {
 
 typedef MczChartSelectionResolver =
     Future<String?> Function(List<MczChartCandidate> charts);
+
+typedef ChartAudioFactory = ChartAudioPort Function();
 
 class _ResolvedResourcePath {
   const _ResolvedResourcePath({
@@ -75,16 +82,21 @@ class _DraftState {
 }
 
 class ChartDocumentController extends ChangeNotifier {
-  ChartDocumentController({CoreSessionFactory? sessionFactory})
-    : _sessionFactory = sessionFactory ?? CoreSession.open;
+  ChartDocumentController({
+    CoreSessionFactory? sessionFactory,
+    ChartAudioFactory? audioFactory,
+  }) : _sessionFactory = sessionFactory ?? CoreSession.open,
+       _audioFactory = audioFactory ?? (() => ChartAudio());
 
   static const int _noteTypeRain = 3;
   static const int _snapshotBatchSize = 128;
   static const int _recentFileLimit = 12;
   static const String _mczImportEventPrefix = 'mcz_import_';
   static const String _mczExportEventPrefix = 'mcz_export_';
+  static const String _audioEventPrefix = 'audio_playback_';
 
   final CoreSessionFactory _sessionFactory;
+  final ChartAudioFactory _audioFactory;
   static _DraftState? _memoryDraft;
   static final List<String> _memoryRecentFiles = <String>[];
 
@@ -104,6 +116,17 @@ class ChartDocumentController extends ChangeNotifier {
   String _lastErrorName = 'none';
   int _noteIdSeed = 0;
   EditorMode _editorMode = EditorMode.select;
+  PlaybackStatus _playbackStatus = PlaybackStatus.idle;
+  int _playheadMs = 0;
+  double _playheadBeat = 0.0;
+  int _durationMs = 0;
+  double _playbackRate = 1.0;
+  BeatTimeMapper? _beatTimeMapper;
+  ChartAudioPort? _audio;
+  StreamSubscription<Duration>? _audioPositionSub;
+  StreamSubscription<Duration?>? _audioDurationSub;
+  StreamSubscription<ChartAudioPlaybackState>? _audioStateSub;
+  String? _preparedAudioPath;
 
   CoreStartupReport? get startupReport => _startupReport;
   bool get sessionOpen => _session != null;
@@ -118,6 +141,11 @@ class ChartDocumentController extends ChangeNotifier {
   bool get canRedo => _session?.canRedo ?? false;
   EditorMode get editorMode => _editorMode;
   bool get hasDraft => _memoryDraft != null;
+  PlaybackStatus get playbackStatus => _playbackStatus;
+  int get playheadMs => _playheadMs;
+  double get playheadBeat => _playheadBeat;
+  int get durationMs => _durationMs;
+  double get playbackRate => _playbackRate;
 
   UnmodifiableListView<CoreNoteSnapshot> get notes {
     _refreshSnapshotsIfNeeded();
@@ -155,6 +183,7 @@ class ChartDocumentController extends ChangeNotifier {
     try {
       _session?.close();
       _session = _sessionFactory();
+      _teardownAudio(resetRate: false);
       _currentFilePath = filePath;
       _dirty = false;
       _cacheRevision = -1;
@@ -166,6 +195,8 @@ class ChartDocumentController extends ChangeNotifier {
       _lastErrorCode = 0;
       _lastErrorName = 'none';
       _syncRevisionFromCore();
+      _rebuildBeatTimeMapper();
+      _resetPlaybackState(notify: false, keepRate: true);
       _lastEventLog = 'session_opened';
       _refreshSnapshotsIfNeeded();
     } catch (e) {
@@ -179,6 +210,7 @@ class ChartDocumentController extends ChangeNotifier {
   void closeSession() {
     _session?.close();
     _session = null;
+    _teardownAudio(resetRate: false);
     _dirty = false;
     _currentFilePath = null;
     _revision = 0;
@@ -190,6 +222,8 @@ class ChartDocumentController extends ChangeNotifier {
     _lastError = '';
     _lastErrorCode = 0;
     _lastErrorName = 'none';
+    _beatTimeMapper = null;
+    _resetPlaybackState(notify: false, keepRate: true);
     _lastEventLog = 'session_closed';
     notifyListeners();
   }
@@ -257,6 +291,9 @@ class ChartDocumentController extends ChangeNotifier {
       _dirty = false;
       _cacheRevision = -1;
       _refreshSnapshotsIfNeeded();
+      _rebuildBeatTimeMapper();
+      _teardownAudio(resetRate: false);
+      _resetPlaybackState(notify: false, keepRate: true);
       _appendRecentFile(path);
       _lastError = '';
       _lastErrorCode = 0;
@@ -655,6 +692,185 @@ class ChartDocumentController extends ChangeNotifier {
     }
   }
 
+  Future<bool> prepareAudioFromCurrentChart() async {
+    if (_session == null) {
+      _setPlaybackFailure('session_not_open');
+      return false;
+    }
+    final chartPath = (_currentFilePath ?? '').trim();
+    if (chartPath.isEmpty) {
+      _setPlaybackFailure('chart_path_required');
+      return false;
+    }
+
+    _refreshSnapshotsIfNeeded();
+    _rebuildBeatTimeMapper();
+
+    final rawAudioRef = _cachedMetadata.audioFile.trim();
+    final normalizedAudioRef = _normalizeResourceReference(rawAudioRef);
+    if (normalizedAudioRef == null) {
+      _setPlaybackFailure('audio_reference_missing');
+      return false;
+    }
+
+    final resolvedAudioPath = _resolveAudioSourcePath(
+      chartPath: chartPath,
+      normalizedAudioReference: normalizedAudioRef,
+    );
+    if (!File(resolvedAudioPath).existsSync()) {
+      _setPlaybackFailure('audio_source_missing:$resolvedAudioPath');
+      return false;
+    }
+
+    try {
+      _setPlaybackStatus(
+        PlaybackStatus.loading,
+        event: '${_audioEventPrefix}load',
+      );
+      await _ensureAudioReady();
+      await _audio!.loadFile(resolvedAudioPath);
+      await _audio!.setRate(_playbackRate);
+      _preparedAudioPath = resolvedAudioPath;
+      _durationMs = _audio!.currentDuration?.inMilliseconds ?? _durationMs;
+      _playheadMs = _audio!.currentPosition.inMilliseconds;
+      _playheadBeat = _msToBeat(_playheadMs);
+      _setPlaybackStatus(
+        PlaybackStatus.ready,
+        event: '${_audioEventPrefix}prepared',
+      );
+      return true;
+    } catch (e) {
+      _setPlaybackFailure('prepare_failed:$e');
+      return false;
+    }
+  }
+
+  Future<bool> play() async {
+    if (_session == null) {
+      _setPlaybackFailure('session_not_open');
+      return false;
+    }
+    if (_audio == null || _preparedAudioPath == null) {
+      final prepared = await prepareAudioFromCurrentChart();
+      if (!prepared) {
+        return false;
+      }
+    }
+
+    try {
+      await _audio!.play();
+      _setPlaybackStatus(
+        PlaybackStatus.playing,
+        event: '${_audioEventPrefix}play',
+      );
+      return true;
+    } catch (e) {
+      _setPlaybackFailure('play_failed:$e');
+      return false;
+    }
+  }
+
+  Future<bool> pause() async {
+    if (_audio == null) {
+      _setPlaybackFailure('audio_not_prepared');
+      return false;
+    }
+    try {
+      await _audio!.pause();
+      _setPlaybackStatus(
+        PlaybackStatus.paused,
+        event: '${_audioEventPrefix}pause',
+      );
+      return true;
+    } catch (e) {
+      _setPlaybackFailure('pause_failed:$e');
+      return false;
+    }
+  }
+
+  Future<bool> seekToBeat(double beat) async {
+    if (_audio == null || _beatTimeMapper == null) {
+      _setPlaybackFailure('audio_not_prepared');
+      return false;
+    }
+
+    try {
+      final rawTargetMs = _beatToMs(beat);
+      final targetMs = _durationMs > 0
+          ? rawTargetMs.clamp(0, _durationMs)
+          : max(0, rawTargetMs);
+      final target = Duration(milliseconds: targetMs);
+      await _audio!.seek(target);
+      _playheadMs = targetMs;
+      _playheadBeat = _msToBeat(targetMs);
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      _lastEventLog = '${_audioEventPrefix}seek';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setPlaybackFailure('seek_failed:$e');
+      return false;
+    }
+  }
+
+  Future<bool> setPlaybackRate(double rate) async {
+    if (rate <= 0) {
+      _setPlaybackFailure('invalid_rate:$rate');
+      return false;
+    }
+    _playbackRate = rate;
+    if (_audio == null) {
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      _lastEventLog = '${_audioEventPrefix}rate_set';
+      notifyListeners();
+      return true;
+    }
+    try {
+      await _audio!.setRate(rate);
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      _lastEventLog = '${_audioEventPrefix}rate_set';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setPlaybackFailure('set_rate_failed:$e');
+      return false;
+    }
+  }
+
+  Future<bool> stopAndReset() async {
+    if (_audio == null) {
+      _setPlaybackFailure('audio_not_prepared');
+      return false;
+    }
+    try {
+      await _audio!.pause();
+      await _audio!.seek(Duration.zero);
+      _playheadMs = 0;
+      _playheadBeat = _msToBeat(0);
+      _setPlaybackStatus(
+        PlaybackStatus.paused,
+        event: '${_audioEventPrefix}stop',
+      );
+      return true;
+    } catch (e) {
+      _setPlaybackFailure('stop_failed:$e');
+      return false;
+    }
+  }
+
+  Future<void> handleAppPaused() async {
+    if (_audio == null || _playbackStatus != PlaybackStatus.playing) {
+      return;
+    }
+    await pause();
+  }
+
   void handleNoteTap(String id) {
     switch (_editorMode) {
       case EditorMode.delete:
@@ -1028,6 +1244,9 @@ class ChartDocumentController extends ChangeNotifier {
 
       _syncRevisionFromCore();
       _refreshSnapshotsIfNeeded();
+      _rebuildBeatTimeMapper();
+      _teardownAudio(resetRate: false);
+      _resetPlaybackState(notify: false, keepRate: true);
       _selectedNoteIds.addAll(
         draft.selectedIds.where((id) => _containsNoteId(id)),
       );
@@ -1042,8 +1261,160 @@ class ChartDocumentController extends ChangeNotifier {
     }
   }
 
+  Future<void> _ensureAudioReady() async {
+    if (_audio != null) {
+      return;
+    }
+    final created = _audioFactory();
+    _audio = created;
+    _audioPositionSub = created.positionStream.listen((position) {
+      _playheadMs = position.inMilliseconds;
+      _playheadBeat = _msToBeat(_playheadMs);
+      if (_playbackStatus == PlaybackStatus.playing ||
+          _playbackStatus == PlaybackStatus.paused ||
+          _playbackStatus == PlaybackStatus.ready) {
+        notifyListeners();
+      }
+    });
+    _audioDurationSub = created.durationStream.listen((duration) {
+      _durationMs = duration?.inMilliseconds ?? 0;
+      notifyListeners();
+    });
+    _audioStateSub = created.stateStream.listen(
+      (state) {
+        switch (state) {
+          case ChartAudioPlaybackState.idle:
+            _playbackStatus = PlaybackStatus.idle;
+            break;
+          case ChartAudioPlaybackState.loading:
+            _playbackStatus = PlaybackStatus.loading;
+            break;
+          case ChartAudioPlaybackState.ready:
+            _playbackStatus = PlaybackStatus.ready;
+            break;
+          case ChartAudioPlaybackState.playing:
+            _playbackStatus = PlaybackStatus.playing;
+            break;
+          case ChartAudioPlaybackState.paused:
+          case ChartAudioPlaybackState.completed:
+            _playbackStatus = PlaybackStatus.paused;
+            break;
+          case ChartAudioPlaybackState.error:
+            _playbackStatus = PlaybackStatus.error;
+            break;
+        }
+        notifyListeners();
+      },
+      onError: (Object err) {
+        _setPlaybackFailure('stream_error:$err');
+      },
+    );
+  }
+
+  String _resolveAudioSourcePath({
+    required String chartPath,
+    required String normalizedAudioReference,
+  }) {
+    if (_looksAbsolutePath(normalizedAudioReference)) {
+      return path.normalize(normalizedAudioReference);
+    }
+    final chartDirectory = File(chartPath).parent.path;
+    return path.joinAll(<String>[
+      chartDirectory,
+      ...path.posix.split(normalizedAudioReference),
+    ]);
+  }
+
+  void _setPlaybackStatus(PlaybackStatus status, {required String event}) {
+    _playbackStatus = status;
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = event;
+    notifyListeners();
+  }
+
+  void _setPlaybackFailure(String message) {
+    _playbackStatus = PlaybackStatus.error;
+    _lastEventLog = '${_audioEventPrefix}failed';
+    _lastError = '$_audioEventPrefix$message';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    notifyListeners();
+  }
+
+  void _resetPlaybackState({required bool notify, required bool keepRate}) {
+    _playbackStatus = PlaybackStatus.idle;
+    _playheadMs = 0;
+    _playheadBeat = 0.0;
+    _durationMs = 0;
+    _preparedAudioPath = null;
+    if (!keepRate) {
+      _playbackRate = 1.0;
+    }
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _teardownAudio({required bool resetRate}) {
+    final positionSub = _audioPositionSub;
+    _audioPositionSub = null;
+    if (positionSub != null) {
+      unawaited(positionSub.cancel());
+    }
+    final durationSub = _audioDurationSub;
+    _audioDurationSub = null;
+    if (durationSub != null) {
+      unawaited(durationSub.cancel());
+    }
+    final stateSub = _audioStateSub;
+    _audioStateSub = null;
+    if (stateSub != null) {
+      unawaited(stateSub.cancel());
+    }
+    final audio = _audio;
+    _audio = null;
+    if (audio != null) {
+      unawaited(audio.dispose());
+    }
+    _resetPlaybackState(notify: false, keepRate: !resetRate);
+  }
+
+  void _rebuildBeatTimeMapper() {
+    _refreshSnapshotsIfNeeded();
+    _beatTimeMapper = BeatTimeMapper.fromChart(
+      bpms: _cachedBpms,
+      offsetMs: _cachedMetadata.offsetMs,
+    );
+    _playheadBeat = _msToBeat(_playheadMs);
+  }
+
+  int _beatToMs(double beat) {
+    final mapper =
+        _beatTimeMapper ??
+        BeatTimeMapper.fromChart(
+          bpms: _cachedBpms,
+          offsetMs: _cachedMetadata.offsetMs,
+        );
+    _beatTimeMapper = mapper;
+    return mapper.beatToMs(beat);
+  }
+
+  double _msToBeat(int ms) {
+    final mapper =
+        _beatTimeMapper ??
+        BeatTimeMapper.fromChart(
+          bpms: _cachedBpms,
+          offsetMs: _cachedMetadata.offsetMs,
+        );
+    _beatTimeMapper = mapper;
+    return mapper.msToBeat(ms);
+  }
+
   @override
   void dispose() {
+    _teardownAudio(resetRate: false);
     _session?.close();
     _session = null;
     super.dispose();
@@ -1283,6 +1654,14 @@ class ChartDocumentController extends ChangeNotifier {
     _cacheRevision = -1;
     _syncRevisionFromCore();
     _refreshSnapshotsIfNeeded();
+    _rebuildBeatTimeMapper();
+    if (event.startsWith('set_meta_ok') ||
+        event.startsWith('add_bpm_ok') ||
+        event.startsWith('update_bpm_ok') ||
+        event.startsWith('remove_bpm_ok')) {
+      _teardownAudio(resetRate: false);
+      _resetPlaybackState(notify: false, keepRate: true);
+    }
     _selectedNoteIds.removeWhere((id) => !_containsNoteId(id));
     _lastError = '';
     _lastErrorCode = 0;
