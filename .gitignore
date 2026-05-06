@@ -43,3 +43,18 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Codex workflow temp context files
+.codex_tmp/
+context_checkpoints/
+*.codex.tmp
+SYNC_EXECUTION_CONTEXT_*.md
+
+# Android local build intermediates
+/android/build/
+
+# Local environment config
+.env
+.env.*
+!.env.example
+*.local
