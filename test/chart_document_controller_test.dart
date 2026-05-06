@@ -1,282 +1,10 @@
+﻿import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:malody_catch_mobile/core/chart_document_controller.dart';
-import 'package:malody_catch_mobile/core/core_session.dart';
 import 'package:malody_catch_mobile/core/native_core.dart';
 
-class FakeCoreSession implements CoreSessionPort {
-  final List<CoreNoteSnapshot> _notes = <CoreNoteSnapshot>[];
-  bool _closed = false;
-  bool _canUndo = false;
-  bool _canRedo = false;
-  String _lastError = '';
-  int _lastErrorCode = 0;
-  String _lastErrorName = 'none';
-  int _revision = 0;
-
-  @override
-  bool get isClosed => _closed;
-
-  @override
-  String get lastError => _lastError;
-
-  @override
-  String get lastErrorDetails => _lastError.isEmpty
-      ? 'none(0)'
-      : '$_lastErrorName($_lastErrorCode): $_lastError';
-
-  @override
-  int get lastErrorCode => _lastErrorCode;
-
-  @override
-  String get lastErrorName => _lastErrorName;
-
-  @override
-  int get noteCount => _notes.length;
-
-  @override
-  int get chartRevision => _revision;
-
-  @override
-  CoreChartSummary? chartSummary() {
-    return CoreChartSummary(
-      noteCount: _notes.length,
-      bpmCount: 1,
-      revision: _revision,
-      canUndo: _canUndo,
-      canRedo: _canRedo,
-      title: '',
-      artist: '',
-      difficulty: '',
-    );
-  }
-
-  @override
-  CoreNoteSnapshot? noteSnapshot(int index) {
-    if (index < 0 || index >= _notes.length) {
-      return null;
-    }
-    return _notes[index];
-  }
-
-  @override
-  List<CoreNoteSnapshot> noteSnapshots({
-    required int startIndex,
-    required int maxCount,
-  }) {
-    if (startIndex < 0 || startIndex >= _notes.length || maxCount <= 0) {
-      return const <CoreNoteSnapshot>[];
-    }
-    final end = (startIndex + maxCount).clamp(0, _notes.length);
-    return _notes.sublist(startIndex, end);
-  }
-
-  @override
-  bool addNormalNote({
-    required String id,
-    required int measure,
-    required int numerator,
-    required int denominator,
-    required int x,
-  }) {
-    if (_closed) {
-      _setMockError('closed', 6, 'operation_failed');
-      return false;
-    }
-    if (x < 0 || x > 512) {
-      _setMockError('invalid_x', 3, 'out_of_range');
-      return false;
-    }
-    _notes.add(
-      CoreNoteSnapshot(
-        id: id,
-        type: 0,
-        beat: CoreBeat(
-          measure: measure,
-          numerator: numerator,
-          denominator: denominator,
-        ),
-        endBeat: CoreBeat(
-          measure: measure,
-          numerator: numerator,
-          denominator: denominator,
-        ),
-        x: x,
-        sound: '',
-        volume: 100,
-        offsetMs: 0,
-      ),
-    );
-    _setMockError('', 0, 'none');
-    _canUndo = true;
-    _canRedo = false;
-    _revision += 1;
-    return true;
-  }
-
-  @override
-  bool addRainNote({
-    required String id,
-    required CoreBeat beat,
-    required CoreBeat endBeat,
-    required int x,
-  }) {
-    if (_closed) {
-      _setMockError('closed', 6, 'operation_failed');
-      return false;
-    }
-    if (x < 0 || x > 512) {
-      _setMockError('invalid_x', 3, 'out_of_range');
-      return false;
-    }
-    _notes.add(
-      CoreNoteSnapshot(
-        id: id,
-        type: 3,
-        beat: beat,
-        endBeat: endBeat,
-        x: x,
-        sound: '',
-        volume: 100,
-        offsetMs: 0,
-      ),
-    );
-    _setMockError('', 0, 'none');
-    _canUndo = true;
-    _canRedo = false;
-    _revision += 1;
-    return true;
-  }
-
-  @override
-  bool moveRainNote({
-    required String id,
-    required CoreBeat beat,
-    required CoreBeat endBeat,
-    required int x,
-  }) {
-    if (_closed) {
-      _setMockError('closed', 6, 'operation_failed');
-      return false;
-    }
-    final index = _notes.indexWhere((n) => n.id == id && n.type == 3);
-    if (index < 0) {
-      _setMockError('not_found', 5, 'not_found');
-      return false;
-    }
-    _notes[index] = CoreNoteSnapshot(
-      id: _notes[index].id,
-      type: 3,
-      beat: beat,
-      endBeat: endBeat,
-      x: x,
-      sound: '',
-      volume: 100,
-      offsetMs: 0,
-    );
-    _setMockError('', 0, 'none');
-    _canUndo = true;
-    _canRedo = false;
-    _revision += 1;
-    return true;
-  }
-
-  @override
-  bool addSoundNote({
-    required String id,
-    required CoreBeat beat,
-    required String sound,
-    required int volume,
-    required int offsetMs,
-  }) {
-    if (_closed) {
-      _setMockError('closed', 6, 'operation_failed');
-      return false;
-    }
-    if (sound.isEmpty) {
-      _setMockError('invalid_sound', 4, 'validation_failed');
-      return false;
-    }
-    _notes.add(
-      CoreNoteSnapshot(
-        id: id,
-        type: 1,
-        beat: beat,
-        endBeat: beat,
-        x: -1,
-        sound: sound,
-        volume: volume,
-        offsetMs: offsetMs,
-      ),
-    );
-    _setMockError('', 0, 'none');
-    _canUndo = true;
-    _canRedo = false;
-    _revision += 1;
-    return true;
-  }
-
-  @override
-  bool removeNoteById(String id) {
-    if (_closed) {
-      _setMockError('closed', 6, 'operation_failed');
-      return false;
-    }
-    final index = _notes.indexWhere((n) => n.id == id);
-    if (index < 0) {
-      _setMockError('not_found', 5, 'not_found');
-      return false;
-    }
-    _notes.removeAt(index);
-    _setMockError('', 0, 'none');
-    _canUndo = true;
-    _canRedo = false;
-    _revision += 1;
-    return true;
-  }
-
-  @override
-  bool get canUndo => _canUndo;
-
-  @override
-  bool get canRedo => _canRedo;
-
-  @override
-  bool undo() {
-    if (!_canUndo) {
-      _setMockError('cannot_undo', 6, 'operation_failed');
-      return false;
-    }
-    _canUndo = false;
-    _canRedo = true;
-    _setMockError('', 0, 'none');
-    _revision += 1;
-    return true;
-  }
-
-  @override
-  bool redo() {
-    if (!_canRedo) {
-      _setMockError('cannot_redo', 6, 'operation_failed');
-      return false;
-    }
-    _canRedo = false;
-    _canUndo = true;
-    _setMockError('', 0, 'none');
-    _revision += 1;
-    return true;
-  }
-
-  void _setMockError(String message, int code, String name) {
-    _lastError = message;
-    _lastErrorCode = code;
-    _lastErrorName = name;
-  }
-
-  @override
-  void close() {
-    _closed = true;
-  }
-}
+import 'support/fake_core_session.dart';
 
 void main() {
   test('controller open/add/select/remove flow', () {
@@ -301,78 +29,82 @@ void main() {
     expect(controller.notes, isEmpty);
   });
 
-  test('controller handles failures and keeps error text', () {
+  test('controller supports bpm/meta and batch move', () {
     final controller = ChartDocumentController(
       sessionFactory: () => FakeCoreSession(),
     );
 
     controller.openSession();
-    controller.addNormalNote(measure: 1, numerator: 0, denominator: 1, x: 999);
+    expect(controller.bpms.length, 1);
 
-    expect(controller.notes.length, 0);
-    expect(controller.lastError, isNotEmpty);
-    expect(controller.lastErrorCode, 3);
-    expect(controller.lastErrorName, 'out_of_range');
-    expect(controller.lastError, contains('out_of_range(3):'));
+    controller.addBpmEntry(
+      beat: const CoreBeat(measure: 8, numerator: 0, denominator: 1),
+      bpm: 160,
+    );
+    expect(controller.bpms.length, 2);
+
+    final nextMeta = controller.metadata.copyWith(title: 't1', artist: 'a1');
+    controller.updateMetadata(nextMeta);
+    expect(controller.metadata.title, 't1');
+
+    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 120);
+    final original = controller.notes.first;
+    controller.applyNoteBatch(<CoreNoteBatchOp>[
+      CoreNoteBatchOp(
+        opType: CoreNoteBatchOpType.move,
+        note: CoreNoteSnapshot(
+          id: original.id,
+          type: original.type,
+          beat: const CoreBeat(measure: 4, numerator: 0, denominator: 1),
+          endBeat: original.endBeat,
+          x: 300,
+          sound: original.sound,
+          volume: original.volume,
+          offsetMs: original.offsetMs,
+        ),
+      ),
+    ]);
+    expect(controller.notes.first.beat.measure, 4);
+    expect(controller.notes.first.x, 300);
   });
 
-  test('controller mode and draft roundtrip', () {
+  test('controller .mc save and reopen roundtrip', () {
     final controller = ChartDocumentController(
       sessionFactory: () => FakeCoreSession(),
     );
-
     controller.openSession();
-    controller.setEditorMode(EditorMode.delete);
-    expect(controller.editorMode, EditorMode.delete);
+    controller.addNormalNote(measure: 1, numerator: 0, denominator: 1, x: 200);
+    controller.updateMetadata(controller.metadata.copyWith(title: 'Roundtrip'));
 
-    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 160);
-    final originalId = controller.notes.first.id;
-    controller.selectSingle(originalId);
-    controller.saveDraftToMemory();
-    expect(controller.hasDraft, isTrue);
+    final tempDir = Directory.systemTemp.createTempSync('malody_mobile_test');
+    final path = '${tempDir.path}${Platform.pathSeparator}roundtrip.mc';
 
-    controller.closeSession();
-    expect(controller.sessionOpen, isFalse);
+    final saved = controller.saveChart(path: path);
+    expect(saved, isTrue);
+    expect(File(path).existsSync(), isTrue);
 
-    controller.restoreDraftFromMemory();
-    expect(controller.sessionOpen, isTrue);
-    expect(controller.notes.length, 1);
-    expect(controller.notes.first.id, originalId);
-    expect(controller.selectedNoteIds.contains(originalId), isTrue);
-    expect(controller.editorMode, EditorMode.delete);
+    final another = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    final opened = another.openChartFile(path);
+    expect(opened, isTrue);
+    expect(another.notes.length, 1);
+    expect(another.metadata.title, 'Roundtrip');
+
+    tempDir.deleteSync(recursive: true);
   });
 
-  test('controller supports rain add/move and sound add', () {
+  test('controller keeps mcz fallback on open/save', () {
     final controller = ChartDocumentController(
       sessionFactory: () => FakeCoreSession(),
     );
+    final opened = controller.openChartFile(r'C:\tmp\fallback_case.mcz');
+    expect(opened, isFalse);
+    expect(controller.lastError, contains('mcz_fallback_required'));
 
     controller.openSession();
-
-    controller.addRainNote(
-      beat: const CoreBeat(measure: 1, numerator: 0, denominator: 1),
-      endBeat: const CoreBeat(measure: 1, numerator: 1, denominator: 1),
-      x: 192,
-    );
-    controller.addSoundNote(
-      beat: const CoreBeat(measure: 2, numerator: 0, denominator: 1),
-      sound: 'sfx/tap.wav',
-      volume: 80,
-      offsetMs: 12,
-    );
-
-    expect(controller.notes.length, 2);
-    final rain = controller.notes.firstWhere((n) => n.type == 3);
-    controller.selectSingle(rain.id);
-    controller.moveSelectedRainNote(
-      beat: const CoreBeat(measure: 3, numerator: 0, denominator: 1),
-      endBeat: const CoreBeat(measure: 3, numerator: 1, denominator: 1),
-      x: 256,
-    );
-
-    final moved = controller.notes.firstWhere((n) => n.id == rain.id);
-    expect(moved.beat.measure, 3);
-    expect(moved.x, 256);
-    expect(controller.lastError, isEmpty);
+    final saved = controller.saveChart(path: r'C:\tmp\fallback_case.mcz');
+    expect(saved, isFalse);
+    expect(controller.lastError, contains('mcz_fallback_required'));
   });
 }

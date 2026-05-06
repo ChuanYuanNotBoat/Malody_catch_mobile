@@ -6,12 +6,24 @@ The app is intentionally separate from the existing Qt desktop editor. Core
 chart-editing behavior is expected to come from the sibling
 `Malody_catch_core` repository through `dart:ffi`.
 
+## Desktop Sync Baseline
+
+- Synced desktop editor release target: `desktop main` (`2026-05-05`)
+- Source commit from sibling repo `Malody_catch_editor`: `2f60ae6`
+- Mobile startup path currently validates core ABI compatibility before enabling
+  editing actions.
+
 ## Current State
 
-- Android-only Flutter project scaffold.
-- Initial Dart FFI binding in `lib/core/native_core.dart`.
-- `CoreSession` wrapper and startup smoke page are available in
-  `lib/core/core_session.dart` and `lib/main.dart`.
+- Android-focused Flutter editor page with note/BPM/meta editing surface.
+- Dart FFI binding (ABI=4 compatible) is implemented in
+  `lib/core/native_core.dart`.
+- `CoreSession` + `ChartDocumentController` are wired in
+  `lib/core/core_session.dart` and `lib/core/chart_document_controller.dart`.
+- File entry now uses system picker (`file_picker`):
+  open `.mc/.mcz` (with `.mcz` fallback prompt) and save `.mc`.
+- Save flow supports both direct overwrite (known path) and
+  directory-pick + filename input (new file).
 - Android `arm64-v8a` native library is bundled at
   `android/app/src/main/jniLibs/arm64-v8a/libmalody_catch_core_ffi.so`.
 
