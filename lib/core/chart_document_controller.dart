@@ -7,8 +7,25 @@ import 'package:flutter/foundation.dart';
 import 'core_session.dart';
 import 'mc_chart_io.dart';
 import 'native_core.dart';
+import '../io/chart_archive.dart';
+import '../io/chart_workspace.dart';
 
 enum EditorMode { placeNormal, placeRain, delete, select, move }
+
+class MczChartCandidate {
+  const MczChartCandidate({
+    required this.mcPath,
+    required this.relativePath,
+    required this.difficulty,
+  });
+
+  final String mcPath;
+  final String relativePath;
+  final String difficulty;
+}
+
+typedef MczChartSelectionResolver =
+    Future<String?> Function(List<MczChartCandidate> charts);
 
 class _DraftState {
   const _DraftState({
@@ -39,6 +56,8 @@ class ChartDocumentController extends ChangeNotifier {
   static const int _noteTypeRain = 3;
   static const int _snapshotBatchSize = 128;
   static const int _recentFileLimit = 12;
+  static const String _mczImportEventPrefix = 'mcz_import_';
+  static const String _mczExportEventPrefix = 'mcz_export_';
 
   final CoreSessionFactory _sessionFactory;
   static _DraftState? _memoryDraft;
@@ -275,6 +294,31 @@ class ChartDocumentController extends ChangeNotifier {
       _setFailure('save_chart_failed', 'write_error:$e');
       return false;
     }
+  }
+
+  Future<bool> importMczFile({
+    required String mczPath,
+    required ChartArchivePort archive,
+    required ChartWorkspacePort workspace,
+    required MczChartSelectionResolver chooseChart,
+  }) async {
+    reportExternalError(
+      event: '${_mczImportEventPrefix}failed',
+      message: '${_mczImportEventPrefix}not_implemented',
+    );
+    return false;
+  }
+
+  Future<bool> exportMczFile({
+    required String outputPath,
+    required ChartArchivePort archive,
+    required ChartWorkspacePort workspace,
+  }) async {
+    reportExternalError(
+      event: '${_mczExportEventPrefix}failed',
+      message: '${_mczExportEventPrefix}not_implemented',
+    );
+    return false;
   }
 
   void handleNoteTap(String id) {
