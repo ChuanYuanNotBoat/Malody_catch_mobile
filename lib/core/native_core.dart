@@ -77,6 +77,58 @@ final class MceChartSummary extends Struct {
   external Array<Char> difficulty;
 }
 
+final class MceBpmSnapshot extends Struct {
+  external MceBeat beat;
+
+  @Double()
+  external double bpm;
+}
+
+final class MceMetadataSnapshot extends Struct {
+  @Array(128)
+  external Array<Char> title;
+
+  @Array(128)
+  external Array<Char> titleOriginal;
+
+  @Array(128)
+  external Array<Char> artist;
+
+  @Array(128)
+  external Array<Char> artistOriginal;
+
+  @Array(64)
+  external Array<Char> difficulty;
+
+  @Array(128)
+  external Array<Char> chartAuthor;
+
+  @Array(260)
+  external Array<Char> audioFile;
+
+  @Array(260)
+  external Array<Char> backgroundFile;
+
+  @Int32()
+  external int previewTimeMs;
+
+  @Double()
+  external double firstBpm;
+
+  @Int32()
+  external int offsetMs;
+
+  @Int32()
+  external int speed;
+}
+
+final class MceNoteBatchOp extends Struct {
+  @Int32()
+  external int opType;
+
+  external MceNoteSnapshot note;
+}
+
 class CoreBeat {
   const CoreBeat({
     required this.measure,
@@ -131,6 +183,103 @@ class CoreChartSummary {
   final String title;
   final String artist;
   final String difficulty;
+}
+
+class CoreBpmSnapshot {
+  const CoreBpmSnapshot({required this.beat, required this.bpm});
+
+  final CoreBeat beat;
+  final double bpm;
+}
+
+class CoreMetadataSnapshot {
+  const CoreMetadataSnapshot({
+    required this.title,
+    required this.titleOriginal,
+    required this.artist,
+    required this.artistOriginal,
+    required this.difficulty,
+    required this.chartAuthor,
+    required this.audioFile,
+    required this.backgroundFile,
+    required this.previewTimeMs,
+    required this.firstBpm,
+    required this.offsetMs,
+    required this.speed,
+  });
+
+  factory CoreMetadataSnapshot.empty() {
+    return const CoreMetadataSnapshot(
+      title: '',
+      titleOriginal: '',
+      artist: '',
+      artistOriginal: '',
+      difficulty: 'Normal',
+      chartAuthor: '',
+      audioFile: '',
+      backgroundFile: '',
+      previewTimeMs: 0,
+      firstBpm: 120.0,
+      offsetMs: 0,
+      speed: 100,
+    );
+  }
+
+  final String title;
+  final String titleOriginal;
+  final String artist;
+  final String artistOriginal;
+  final String difficulty;
+  final String chartAuthor;
+  final String audioFile;
+  final String backgroundFile;
+  final int previewTimeMs;
+  final double firstBpm;
+  final int offsetMs;
+  final int speed;
+
+  CoreMetadataSnapshot copyWith({
+    String? title,
+    String? titleOriginal,
+    String? artist,
+    String? artistOriginal,
+    String? difficulty,
+    String? chartAuthor,
+    String? audioFile,
+    String? backgroundFile,
+    int? previewTimeMs,
+    double? firstBpm,
+    int? offsetMs,
+    int? speed,
+  }) {
+    return CoreMetadataSnapshot(
+      title: title ?? this.title,
+      titleOriginal: titleOriginal ?? this.titleOriginal,
+      artist: artist ?? this.artist,
+      artistOriginal: artistOriginal ?? this.artistOriginal,
+      difficulty: difficulty ?? this.difficulty,
+      chartAuthor: chartAuthor ?? this.chartAuthor,
+      audioFile: audioFile ?? this.audioFile,
+      backgroundFile: backgroundFile ?? this.backgroundFile,
+      previewTimeMs: previewTimeMs ?? this.previewTimeMs,
+      firstBpm: firstBpm ?? this.firstBpm,
+      offsetMs: offsetMs ?? this.offsetMs,
+      speed: speed ?? this.speed,
+    );
+  }
+}
+
+class CoreNoteBatchOpType {
+  static const int add = 1;
+  static const int move = 2;
+  static const int remove = 3;
+}
+
+class CoreNoteBatchOp {
+  const CoreNoteBatchOp({required this.opType, required this.note});
+
+  final int opType;
+  final CoreNoteSnapshot note;
 }
 
 typedef _SessionCreateNative = Pointer<MceSession> Function();
@@ -215,6 +364,46 @@ typedef _RemoveNoteDart = int Function(Pointer<MceSession>, Pointer<Char>);
 typedef _SessionBoolNative = Int32 Function(Pointer<MceSession>);
 typedef _SessionBoolDart = int Function(Pointer<MceSession>);
 
+typedef _SessionCopyLastErrorNative =
+    Int32 Function(Pointer<MceSession>, Pointer<Char>, Int32);
+typedef _SessionCopyLastErrorDart =
+    int Function(Pointer<MceSession>, Pointer<Char>, int);
+
+typedef _SessionBpmCountNative = Int32 Function(Pointer<MceSession>);
+typedef _SessionBpmCountDart = int Function(Pointer<MceSession>);
+
+typedef _SessionGetBpmNative =
+    Int32 Function(Pointer<MceSession>, Int32, Pointer<MceBpmSnapshot>);
+typedef _SessionGetBpmDart =
+    int Function(Pointer<MceSession>, int, Pointer<MceBpmSnapshot>);
+
+typedef _SessionGetMetadataNative =
+    Int32 Function(Pointer<MceSession>, Pointer<MceMetadataSnapshot>);
+typedef _SessionGetMetadataDart =
+    int Function(Pointer<MceSession>, Pointer<MceMetadataSnapshot>);
+
+typedef _SessionSetMetadataNative =
+    Int32 Function(Pointer<MceSession>, Pointer<MceMetadataSnapshot>);
+typedef _SessionSetMetadataDart =
+    int Function(Pointer<MceSession>, Pointer<MceMetadataSnapshot>);
+
+typedef _SessionAddBpmNative =
+    Int32 Function(Pointer<MceSession>, MceBeat, Double);
+typedef _SessionAddBpmDart = int Function(Pointer<MceSession>, MceBeat, double);
+
+typedef _SessionUpdateBpmNative =
+    Int32 Function(Pointer<MceSession>, Int32, MceBeat, Double);
+typedef _SessionUpdateBpmDart =
+    int Function(Pointer<MceSession>, int, MceBeat, double);
+
+typedef _SessionRemoveBpmNative = Int32 Function(Pointer<MceSession>, Int32);
+typedef _SessionRemoveBpmDart = int Function(Pointer<MceSession>, int);
+
+typedef _SessionApplyNoteBatchNative =
+    Int32 Function(Pointer<MceSession>, Pointer<MceNoteBatchOp>, Int32);
+typedef _SessionApplyNoteBatchDart =
+    int Function(Pointer<MceSession>, Pointer<MceNoteBatchOp>, int);
+
 DynamicLibrary openMalodyCatchCoreLibrary() {
   final String name;
   if (Platform.isAndroid) {
@@ -262,6 +451,11 @@ class NativeCoreBindings {
           .lookupFunction<_LastErrorCodeNative, _LastErrorCodeDart>(
             'mce_session_last_error_code',
           ),
+      _copyLastError = library
+          .lookupFunction<
+            _SessionCopyLastErrorNative,
+            _SessionCopyLastErrorDart
+          >('mce_session_copy_last_error'),
       _errorCodeName = library
           .lookupFunction<_ErrorCodeNameNative, _ErrorCodeNameDart>(
             'mce_error_code_name',
@@ -284,6 +478,34 @@ class NativeCoreBindings {
       _getChartSummary = library
           .lookupFunction<_GetChartSummaryNative, _GetChartSummaryDart>(
             'mce_session_get_chart_summary',
+          ),
+      _bpmCount = library
+          .lookupFunction<_SessionBpmCountNative, _SessionBpmCountDart>(
+            'mce_session_bpm_count',
+          ),
+      _getBpmSnapshot = library
+          .lookupFunction<_SessionGetBpmNative, _SessionGetBpmDart>(
+            'mce_session_get_bpm_snapshot',
+          ),
+      _getMetadata = library
+          .lookupFunction<_SessionGetMetadataNative, _SessionGetMetadataDart>(
+            'mce_session_get_metadata',
+          ),
+      _setMetadata = library
+          .lookupFunction<_SessionSetMetadataNative, _SessionSetMetadataDart>(
+            'mce_session_set_metadata',
+          ),
+      _addBpm = library
+          .lookupFunction<_SessionAddBpmNative, _SessionAddBpmDart>(
+            'mce_session_add_bpm',
+          ),
+      _updateBpm = library
+          .lookupFunction<_SessionUpdateBpmNative, _SessionUpdateBpmDart>(
+            'mce_session_update_bpm',
+          ),
+      _removeBpm = library
+          .lookupFunction<_SessionRemoveBpmNative, _SessionRemoveBpmDart>(
+            'mce_session_remove_bpm',
           ),
       _addNormalNote = library
           .lookupFunction<_AddNormalNoteNative, _AddNormalNoteDart>(
@@ -316,7 +538,12 @@ class NativeCoreBindings {
       ),
       _redo = library.lookupFunction<_SessionBoolNative, _SessionBoolDart>(
         'mce_session_redo',
-      );
+      ),
+      _applyNoteBatch = library
+          .lookupFunction<
+            _SessionApplyNoteBatchNative,
+            _SessionApplyNoteBatchDart
+          >('mce_session_apply_note_batch');
 
   factory NativeCoreBindings.open() {
     try {
@@ -335,12 +562,20 @@ class NativeCoreBindings {
   final _CoreVersionDart _coreVersion;
   final _AbiVersionDart _abiVersion;
   final _LastErrorCodeDart _lastErrorCode;
+  final _SessionCopyLastErrorDart _copyLastError;
   final _ErrorCodeNameDart _errorCodeName;
   final _NoteCountDart _noteCount;
   final _ChartRevisionDart _chartRevision;
   final _GetNoteSnapshotDart _getNoteSnapshot;
   final _GetNoteSnapshotsDart _getNoteSnapshots;
   final _GetChartSummaryDart _getChartSummary;
+  final _SessionBpmCountDart _bpmCount;
+  final _SessionGetBpmDart _getBpmSnapshot;
+  final _SessionGetMetadataDart _getMetadata;
+  final _SessionSetMetadataDart _setMetadata;
+  final _SessionAddBpmDart _addBpm;
+  final _SessionUpdateBpmDart _updateBpm;
+  final _SessionRemoveBpmDart _removeBpm;
   final _AddNormalNoteDart _addNormalNote;
   final _AddRainNoteDart _addRainNote;
   final _MoveRainNoteDart _moveRainNote;
@@ -350,6 +585,7 @@ class NativeCoreBindings {
   final _SessionBoolDart _canRedo;
   final _SessionBoolDart _undo;
   final _SessionBoolDart _redo;
+  final _SessionApplyNoteBatchDart _applyNoteBatch;
 
   Pointer<MceSession> createSession() => _create();
 
@@ -384,11 +620,25 @@ class NativeCoreBindings {
   String lastErrorDetails(Pointer<MceSession> session) {
     final code = lastErrorCode(session);
     final name = errorCodeName(code);
-    final message = lastError(session);
+    final message = copyLastError(session);
     if (message.isEmpty) {
       return '$name($code)';
     }
     return '$name($code): $message';
+  }
+
+  String copyLastError(Pointer<MceSession> session) {
+    const capacity = 1024;
+    final out = calloc<Char>(capacity);
+    try {
+      final copied = _copyLastError(session, out, capacity);
+      if (copied <= 0) {
+        return lastError(session);
+      }
+      return out.cast<Utf8>().toDartString();
+    } finally {
+      calloc.free(out);
+    }
   }
 
   int noteCount(Pointer<MceSession> session) => _noteCount(session);
@@ -453,6 +703,131 @@ class NativeCoreBindings {
     } finally {
       calloc.free(out);
     }
+  }
+
+  int bpmCount(Pointer<MceSession> session) => _bpmCount(session);
+
+  CoreBpmSnapshot? bpmSnapshot(Pointer<MceSession> session, int index) {
+    final out = calloc<MceBpmSnapshot>();
+    try {
+      final ok = _getBpmSnapshot(session, index, out);
+      if (ok == 0) {
+        return null;
+      }
+      final data = out.ref;
+      return CoreBpmSnapshot(
+        beat: CoreBeat(
+          measure: data.beat.measure,
+          numerator: data.beat.numerator,
+          denominator: data.beat.denominator,
+        ),
+        bpm: data.bpm,
+      );
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  List<CoreBpmSnapshot> bpmSnapshots(Pointer<MceSession> session) {
+    final count = bpmCount(session);
+    if (count <= 0) {
+      return const <CoreBpmSnapshot>[];
+    }
+    final out = <CoreBpmSnapshot>[];
+    for (var i = 0; i < count; i++) {
+      final bpm = bpmSnapshot(session, i);
+      if (bpm != null) {
+        out.add(bpm);
+      }
+    }
+    return out;
+  }
+
+  CoreMetadataSnapshot? metadataSnapshot(Pointer<MceSession> session) {
+    final out = calloc<MceMetadataSnapshot>();
+    try {
+      final ok = _getMetadata(session, out);
+      if (ok == 0) {
+        return null;
+      }
+      final data = out.ref;
+      return CoreMetadataSnapshot(
+        title: _charArrayToString(data.title, 128),
+        titleOriginal: _charArrayToString(data.titleOriginal, 128),
+        artist: _charArrayToString(data.artist, 128),
+        artistOriginal: _charArrayToString(data.artistOriginal, 128),
+        difficulty: _charArrayToString(data.difficulty, 64),
+        chartAuthor: _charArrayToString(data.chartAuthor, 128),
+        audioFile: _charArrayToString(data.audioFile, 260),
+        backgroundFile: _charArrayToString(data.backgroundFile, 260),
+        previewTimeMs: data.previewTimeMs,
+        firstBpm: data.firstBpm,
+        offsetMs: data.offsetMs,
+        speed: data.speed,
+      );
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  bool setMetadata(Pointer<MceSession> session, CoreMetadataSnapshot metadata) {
+    final ptr = calloc<MceMetadataSnapshot>();
+    try {
+      _stringToCharArray(metadata.title, ptr.ref.title, 128);
+      _stringToCharArray(metadata.titleOriginal, ptr.ref.titleOriginal, 128);
+      _stringToCharArray(metadata.artist, ptr.ref.artist, 128);
+      _stringToCharArray(metadata.artistOriginal, ptr.ref.artistOriginal, 128);
+      _stringToCharArray(metadata.difficulty, ptr.ref.difficulty, 64);
+      _stringToCharArray(metadata.chartAuthor, ptr.ref.chartAuthor, 128);
+      _stringToCharArray(metadata.audioFile, ptr.ref.audioFile, 260);
+      _stringToCharArray(metadata.backgroundFile, ptr.ref.backgroundFile, 260);
+      ptr.ref.previewTimeMs = metadata.previewTimeMs;
+      ptr.ref.firstBpm = metadata.firstBpm;
+      ptr.ref.offsetMs = metadata.offsetMs;
+      ptr.ref.speed = metadata.speed;
+      return _setMetadata(session, ptr) != 0;
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  bool addBpm({
+    required Pointer<MceSession> session,
+    required CoreBeat beat,
+    required double bpm,
+  }) {
+    final b = calloc<MceBeat>();
+    try {
+      b.ref
+        ..measure = beat.measure
+        ..numerator = beat.numerator
+        ..denominator = beat.denominator;
+      return _addBpm(session, b.ref, bpm) != 0;
+    } finally {
+      calloc.free(b);
+    }
+  }
+
+  bool updateBpm({
+    required Pointer<MceSession> session,
+    required int index,
+    required CoreBeat beat,
+    required double bpm,
+  }) {
+    final b = calloc<MceBeat>();
+    try {
+      b.ref
+        ..measure = beat.measure
+        ..numerator = beat.numerator
+        ..denominator = beat.denominator;
+      return _updateBpm(session, index, b.ref, bpm) != 0;
+    } finally {
+      calloc.free(b);
+    }
+  }
+
+  bool removeBpm(Pointer<MceSession> session, int index) {
+    return _removeBpm(session, index) != 0;
   }
 
   bool addNormalNote({
@@ -584,6 +959,40 @@ class NativeCoreBindings {
   bool canRedo(Pointer<MceSession> session) => _canRedo(session) != 0;
   bool undo(Pointer<MceSession> session) => _undo(session) != 0;
   bool redo(Pointer<MceSession> session) => _redo(session) != 0;
+
+  bool applyNoteBatch(
+    Pointer<MceSession> session,
+    List<CoreNoteBatchOp> operations,
+  ) {
+    if (operations.isEmpty) {
+      return true;
+    }
+    final ptr = calloc<MceNoteBatchOp>(operations.length);
+    try {
+      for (var i = 0; i < operations.length; i++) {
+        final op = operations[i];
+        ptr[i].opType = op.opType;
+        final note = op.note;
+        _stringToCharArray(note.id, ptr[i].note.id, 128);
+        ptr[i].note.type = note.type;
+        ptr[i].note.beat
+          ..measure = note.beat.measure
+          ..numerator = note.beat.numerator
+          ..denominator = note.beat.denominator;
+        ptr[i].note.endBeat
+          ..measure = note.endBeat.measure
+          ..numerator = note.endBeat.numerator
+          ..denominator = note.endBeat.denominator;
+        ptr[i].note.x = note.x;
+        _stringToCharArray(note.sound, ptr[i].note.sound, 260);
+        ptr[i].note.volume = note.volume;
+        ptr[i].note.offsetMs = note.offsetMs;
+      }
+      return _applyNoteBatch(session, ptr, operations.length) != 0;
+    } finally {
+      calloc.free(ptr);
+    }
+  }
 }
 
 CoreNoteSnapshot _toCoreNote(MceNoteSnapshot note) {
@@ -617,4 +1026,15 @@ String _charArrayToString(Array<Char> chars, int capacity) {
     bytes.add(value);
   }
   return String.fromCharCodes(bytes);
+}
+
+void _stringToCharArray(String value, Array<Char> target, int capacity) {
+  for (var i = 0; i < capacity; i++) {
+    target[i] = 0;
+  }
+  final units = value.codeUnits;
+  final max = units.length < capacity - 1 ? units.length : capacity - 1;
+  for (var i = 0; i < max; i++) {
+    target[i] = units[i];
+  }
 }

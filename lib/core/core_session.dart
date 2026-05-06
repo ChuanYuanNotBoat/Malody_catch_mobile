@@ -33,6 +33,18 @@ abstract class CoreSessionPort {
   int get noteCount;
   int get chartRevision;
   CoreChartSummary? chartSummary();
+  int get bpmCount;
+  CoreBpmSnapshot? bpmSnapshot(int index);
+  List<CoreBpmSnapshot> bpmSnapshots();
+  CoreMetadataSnapshot? metadataSnapshot();
+  bool setMetadata(CoreMetadataSnapshot metadata);
+  bool addBpm({required CoreBeat beat, required double bpm});
+  bool updateBpm({
+    required int index,
+    required CoreBeat beat,
+    required double bpm,
+  });
+  bool removeBpm(int index);
   CoreNoteSnapshot? noteSnapshot(int index);
   List<CoreNoteSnapshot> noteSnapshots({
     required int startIndex,
@@ -65,6 +77,7 @@ abstract class CoreSessionPort {
     required int offsetMs,
   });
   bool removeNoteById(String id);
+  bool applyNoteBatch(List<CoreNoteBatchOp> operations);
   bool get canUndo;
   bool get canRedo;
   bool undo();
@@ -163,6 +176,60 @@ class CoreSession implements CoreSessionPort {
 
   @override
   int get chartRevision => _bindings.chartRevision(_session);
+
+  @override
+  int get bpmCount => _bindings.bpmCount(_session);
+
+  @override
+  CoreBpmSnapshot? bpmSnapshot(int index) {
+    _ensureOpen();
+    return _bindings.bpmSnapshot(_session, index);
+  }
+
+  @override
+  List<CoreBpmSnapshot> bpmSnapshots() {
+    _ensureOpen();
+    return _bindings.bpmSnapshots(_session);
+  }
+
+  @override
+  CoreMetadataSnapshot? metadataSnapshot() {
+    _ensureOpen();
+    return _bindings.metadataSnapshot(_session);
+  }
+
+  @override
+  bool setMetadata(CoreMetadataSnapshot metadata) {
+    _ensureOpen();
+    return _bindings.setMetadata(_session, metadata);
+  }
+
+  @override
+  bool addBpm({required CoreBeat beat, required double bpm}) {
+    _ensureOpen();
+    return _bindings.addBpm(session: _session, beat: beat, bpm: bpm);
+  }
+
+  @override
+  bool updateBpm({
+    required int index,
+    required CoreBeat beat,
+    required double bpm,
+  }) {
+    _ensureOpen();
+    return _bindings.updateBpm(
+      session: _session,
+      index: index,
+      beat: beat,
+      bpm: bpm,
+    );
+  }
+
+  @override
+  bool removeBpm(int index) {
+    _ensureOpen();
+    return _bindings.removeBpm(_session, index);
+  }
 
   @override
   CoreChartSummary? chartSummary() {
@@ -265,6 +332,12 @@ class CoreSession implements CoreSessionPort {
   bool removeNoteById(String id) {
     _ensureOpen();
     return _bindings.removeNoteById(_session, id);
+  }
+
+  @override
+  bool applyNoteBatch(List<CoreNoteBatchOp> operations) {
+    _ensureOpen();
+    return _bindings.applyNoteBatch(_session, operations);
   }
 
   @override

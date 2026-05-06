@@ -1,9 +1,11 @@
 import 'dart:collection';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
 import 'core_session.dart';
+import 'mc_chart_io.dart';
 import 'native_core.dart';
 
 enum EditorMode { placeNormal, placeRain, delete, select, move }
@@ -12,6 +14,8 @@ class _DraftState {
   const _DraftState({
     required this.filePath,
     required this.notes,
+    required this.bpms,
+    required this.metadata,
     required this.selectedIds,
     required this.dirty,
     required this.revision,
@@ -20,6 +24,8 @@ class _DraftState {
 
   final String? filePath;
   final List<CoreNoteSnapshot> notes;
+  final List<CoreBpmSnapshot> bpms;
+  final CoreMetadataSnapshot metadata;
   final Set<String> selectedIds;
   final bool dirty;
   final int revision;
@@ -30,13 +36,13 @@ class ChartDocumentController extends ChangeNotifier {
   ChartDocumentController({CoreSessionFactory? sessionFactory})
     : _sessionFactory = sessionFactory ?? CoreSession.open;
 
-  static const int _noteTypeNormal = 0;
-  static const int _noteTypeSound = 1;
   static const int _noteTypeRain = 3;
   static const int _snapshotBatchSize = 128;
+  static const int _recentFileLimit = 12;
 
   final CoreSessionFactory _sessionFactory;
   static _DraftState? _memoryDraft;
+  static final List<String> _memoryRecentFiles = <String>[];
 
   CoreStartupReport? _startupReport;
   CoreSessionPort? _session;
@@ -45,6 +51,8 @@ class ChartDocumentController extends ChangeNotifier {
   int _revision = 0;
   int _cacheRevision = -1;
   final List<CoreNoteSnapshot> _cachedNotes = <CoreNoteSnapshot>[];
+  final List<CoreBpmSnapshot> _cachedBpms = <CoreBpmSnapshot>[];
+  CoreMetadataSnapshot _cachedMetadata = CoreMetadataSnapshot.empty();
   final Set<String> _selectedNoteIds = <String>{};
   String _lastEventLog = '';
   String _lastError = '';
@@ -72,8 +80,22 @@ class ChartDocumentController extends ChangeNotifier {
     return UnmodifiableListView<CoreNoteSnapshot>(_cachedNotes);
   }
 
+  UnmodifiableListView<CoreBpmSnapshot> get bpms {
+    _refreshSnapshotsIfNeeded();
+    return UnmodifiableListView<CoreBpmSnapshot>(_cachedBpms);
+  }
+
+  CoreMetadataSnapshot get metadata {
+    _refreshSnapshotsIfNeeded();
+    return _cachedMetadata;
+  }
+
   UnmodifiableSetView<String> get selectedNoteIds {
     return UnmodifiableSetView<String>(_selectedNoteIds);
+  }
+
+  UnmodifiableListView<String> get recentFiles {
+    return UnmodifiableListView<String>(_memoryRecentFiles);
   }
 
   void runStartupSelfCheck() {
@@ -93,12 +115,15 @@ class ChartDocumentController extends ChangeNotifier {
       _dirty = false;
       _cacheRevision = -1;
       _cachedNotes.clear();
+      _cachedBpms.clear();
+      _cachedMetadata = CoreMetadataSnapshot.empty();
       _selectedNoteIds.clear();
       _lastError = '';
       _lastErrorCode = 0;
       _lastErrorName = 'none';
       _syncRevisionFromCore();
       _lastEventLog = 'session_opened';
+      _refreshSnapshotsIfNeeded();
     } catch (e) {
       _session = null;
       _lastError = e.toString();
@@ -115,6 +140,8 @@ class ChartDocumentController extends ChangeNotifier {
     _revision = 0;
     _cacheRevision = -1;
     _cachedNotes.clear();
+    _cachedBpms.clear();
+    _cachedMetadata = CoreMetadataSnapshot.empty();
     _selectedNoteIds.clear();
     _lastError = '';
     _lastErrorCode = 0;
@@ -131,6 +158,123 @@ class ChartDocumentController extends ChangeNotifier {
     _lastError = '';
     _lastEventLog = 'mode_set:${mode.name}';
     notifyListeners();
+  }
+
+  bool openChartFile(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.mcz')) {
+      _setFailure(
+        'open_chart_failed',
+        'mcz_fallback_required: please extract .mc from .mcz first.',
+      );
+      return false;
+    }
+    if (!lower.endsWith('.mc')) {
+      _setFailure('open_chart_failed', 'unsupported_extension');
+      return false;
+    }
+
+    final file = File(path);
+    if (!file.existsSync()) {
+      _setFailure('open_chart_failed', 'file_not_found:$path');
+      return false;
+    }
+
+    try {
+      final chart = McChartIo.parse(file.readAsStringSync());
+      openSession(filePath: path);
+      final session = _session;
+      if (session == null) {
+        _setFailure('open_chart_failed', 'session_not_open');
+        return false;
+      }
+
+      if (!_replaceBpms(session, chart.bpms)) {
+        _setFailureFromSession('open_chart_failed', session);
+        return false;
+      }
+      if (!session.setMetadata(chart.metadata)) {
+        _setFailureFromSession('open_chart_failed', session);
+        return false;
+      }
+
+      final ops = chart.notes
+          .map(
+            (note) =>
+                CoreNoteBatchOp(opType: CoreNoteBatchOpType.add, note: note),
+          )
+          .toList();
+      if (!session.applyNoteBatch(ops)) {
+        _setFailureFromSession('open_chart_failed', session);
+        return false;
+      }
+
+      _currentFilePath = path;
+      _dirty = false;
+      _cacheRevision = -1;
+      _refreshSnapshotsIfNeeded();
+      _appendRecentFile(path);
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      _lastEventLog = 'open_chart_ok';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setFailure('open_chart_failed', 'parse_error:$e');
+      return false;
+    }
+  }
+
+  bool saveChart({String? path}) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('save_chart_failed', 'session_not_open');
+      return false;
+    }
+
+    final target = (path ?? _currentFilePath ?? '').trim();
+    if (target.isEmpty) {
+      _setFailure('save_chart_failed', 'target_path_required');
+      return false;
+    }
+
+    final lower = target.toLowerCase();
+    if (lower.endsWith('.mcz')) {
+      _setFailure(
+        'save_chart_failed',
+        'mcz_fallback_required: save .mc first, then package externally.',
+      );
+      return false;
+    }
+    if (!lower.endsWith('.mc')) {
+      _setFailure('save_chart_failed', 'unsupported_extension');
+      return false;
+    }
+
+    _refreshSnapshotsIfNeeded();
+
+    final content = McChartIo.encode(
+      metadata: _cachedMetadata,
+      bpms: _cachedBpms,
+      notes: _cachedNotes,
+    );
+
+    try {
+      File(target).writeAsStringSync(content);
+      _currentFilePath = target;
+      _dirty = false;
+      _appendRecentFile(target);
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      _lastEventLog = 'save_chart_ok';
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _setFailure('save_chart_failed', 'write_error:$e');
+      return false;
+    }
   }
 
   void handleNoteTap(String id) {
@@ -157,27 +301,27 @@ class ChartDocumentController extends ChangeNotifier {
     required int denominator,
     required int x,
   }) {
-    final session = _session;
-    if (session == null) {
-      _setFailure('add_note_skipped', 'session_not_open');
-      return;
-    }
-
     _noteIdSeed += 1;
     final id = 'mobile-note-$_noteIdSeed';
-    final ok = session.addNormalNote(
-      id: id,
-      measure: measure,
-      numerator: numerator,
-      denominator: denominator,
+    _commitMutation('add_note_failed', (session) {
+      return session.addNormalNote(
+        id: id,
+        measure: measure,
+        numerator: numerator,
+        denominator: denominator,
+        x: x,
+      );
+    }, 'add_note_ok:$id');
+  }
+
+  void addNormalNoteAtBeat({required double beat, required int x}) {
+    final parsed = _doubleToBeat(beat);
+    addNormalNote(
+      measure: parsed.measure,
+      numerator: parsed.numerator,
+      denominator: parsed.denominator,
       x: x,
     );
-    if (!ok) {
-      _setFailureFromSession('add_note_failed', session);
-      return;
-    }
-
-    _markChanged('add_note_ok:$id');
   }
 
   void addRainNote({
@@ -185,21 +329,17 @@ class ChartDocumentController extends ChangeNotifier {
     required CoreBeat endBeat,
     required int x,
   }) {
-    final session = _session;
-    if (session == null) {
-      _setFailure('add_rain_skipped', 'session_not_open');
-      return;
-    }
-
     _noteIdSeed += 1;
     final id = 'mobile-rain-$_noteIdSeed';
-    final ok = session.addRainNote(id: id, beat: beat, endBeat: endBeat, x: x);
-    if (!ok) {
-      _setFailureFromSession('add_rain_failed', session);
-      return;
-    }
+    _commitMutation('add_rain_failed', (session) {
+      return session.addRainNote(id: id, beat: beat, endBeat: endBeat, x: x);
+    }, 'add_rain_ok:$id');
+  }
 
-    _markChanged('add_rain_ok:$id');
+  void addRainNoteAtBeat({required double beat, required int x}) {
+    final start = _doubleToBeat(beat);
+    final end = _doubleToBeat(beat + 1.0);
+    addRainNote(beat: start, endBeat: end, x: x);
   }
 
   void moveSelectedRainNote({
@@ -237,50 +377,87 @@ class ChartDocumentController extends ChangeNotifier {
     _markChanged('move_rain_ok:$id');
   }
 
+  void moveSelectedNoteTo({required double beat, required int x}) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('move_note_failed', 'session_not_open');
+      return;
+    }
+    if (_selectedNoteIds.length != 1) {
+      _setFailure('move_note_failed', 'select_single_note');
+      return;
+    }
+
+    final selectedId = _selectedNoteIds.first;
+    final source = _findNoteById(selectedId);
+    if (source == null) {
+      _setFailure('move_note_failed', 'note_not_found:$selectedId');
+      return;
+    }
+
+    final nextBeat = _doubleToBeat(beat);
+    if (source.type == _noteTypeRain) {
+      final span = max(
+        0.0,
+        _beatToDouble(source.endBeat) - _beatToDouble(source.beat),
+      );
+      final nextEnd = _doubleToBeat(beat + max(span, 1.0));
+      moveSelectedRainNote(beat: nextBeat, endBeat: nextEnd, x: x);
+      return;
+    }
+
+    final moved = CoreNoteSnapshot(
+      id: source.id,
+      type: source.type,
+      beat: nextBeat,
+      endBeat: source.endBeat,
+      x: x,
+      sound: source.sound,
+      volume: source.volume,
+      offsetMs: source.offsetMs,
+    );
+
+    final ok = session.applyNoteBatch(<CoreNoteBatchOp>[
+      CoreNoteBatchOp(opType: CoreNoteBatchOpType.move, note: moved),
+    ]);
+    if (!ok) {
+      _setFailureFromSession('move_note_failed', session);
+      return;
+    }
+
+    _markChanged('move_note_ok:${source.id}');
+  }
+
   void addSoundNote({
     required CoreBeat beat,
     required String sound,
     int volume = 100,
     int offsetMs = 0,
   }) {
-    final session = _session;
-    if (session == null) {
-      _setFailure('add_sound_skipped', 'session_not_open');
-      return;
-    }
-
     _noteIdSeed += 1;
     final id = 'mobile-sound-$_noteIdSeed';
-    final ok = session.addSoundNote(
-      id: id,
-      beat: beat,
-      sound: sound,
-      volume: volume,
-      offsetMs: offsetMs,
-    );
-    if (!ok) {
-      _setFailureFromSession('add_sound_failed', session);
-      return;
-    }
-
-    _markChanged('add_sound_ok:$id');
+    _commitMutation('add_sound_failed', (session) {
+      return session.addSoundNote(
+        id: id,
+        beat: beat,
+        sound: sound,
+        volume: volume,
+        offsetMs: offsetMs,
+      );
+    }, 'add_sound_ok:$id');
   }
 
   void removeNoteById(String id) {
-    final session = _session;
-    if (session == null) {
-      _setFailure('remove_note_skipped', 'session_not_open');
-      return;
-    }
-
-    final ok = session.removeNoteById(id);
-    if (!ok) {
-      _setFailureFromSession('remove_note_failed', session);
-      return;
-    }
-
-    _selectedNoteIds.remove(id);
-    _markChanged('remove_note_ok:$id');
+    _commitMutation(
+      'remove_note_failed',
+      (session) {
+        return session.removeNoteById(id);
+      },
+      'remove_note_ok:$id',
+      beforeSuccess: () {
+        _selectedNoteIds.remove(id);
+      },
+    );
   }
 
   void removeLastNote() {
@@ -293,31 +470,90 @@ class ChartDocumentController extends ChangeNotifier {
   }
 
   void undo() {
-    final session = _session;
-    if (session == null) {
-      _setFailure('undo_skipped', 'session_not_open');
-      return;
-    }
-    final ok = session.undo();
-    if (!ok) {
-      _setFailureFromSession('undo_failed', session);
-      return;
-    }
-    _markChanged('undo_ok');
+    _commitMutation('undo_failed', (session) => session.undo(), 'undo_ok');
   }
 
   void redo() {
+    _commitMutation('redo_failed', (session) => session.redo(), 'redo_ok');
+  }
+
+  bool applyNoteBatch(List<CoreNoteBatchOp> operations) {
     final session = _session;
     if (session == null) {
-      _setFailure('redo_skipped', 'session_not_open');
-      return;
+      _setFailure('batch_edit_failed', 'session_not_open');
+      return false;
     }
-    final ok = session.redo();
+    final ok = session.applyNoteBatch(operations);
     if (!ok) {
-      _setFailureFromSession('redo_failed', session);
-      return;
+      _setFailureFromSession('batch_edit_failed', session);
+      return false;
     }
-    _markChanged('redo_ok');
+    _markChanged('batch_edit_ok:${operations.length}');
+    return true;
+  }
+
+  bool addBpmEntry({required CoreBeat beat, required double bpm}) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('add_bpm_failed', 'session_not_open');
+      return false;
+    }
+    final ok = session.addBpm(beat: beat, bpm: bpm);
+    if (!ok) {
+      _setFailureFromSession('add_bpm_failed', session);
+      return false;
+    }
+    _markChanged('add_bpm_ok');
+    return true;
+  }
+
+  bool updateBpmEntry({
+    required int index,
+    required CoreBeat beat,
+    required double bpm,
+  }) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('update_bpm_failed', 'session_not_open');
+      return false;
+    }
+    final ok = session.updateBpm(index: index, beat: beat, bpm: bpm);
+    if (!ok) {
+      _setFailureFromSession('update_bpm_failed', session);
+      return false;
+    }
+    _markChanged('update_bpm_ok:$index');
+    return true;
+  }
+
+  bool removeBpmEntry(int index) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('remove_bpm_failed', 'session_not_open');
+      return false;
+    }
+    final ok = session.removeBpm(index);
+    if (!ok) {
+      _setFailureFromSession('remove_bpm_failed', session);
+      return false;
+    }
+    _markChanged('remove_bpm_ok:$index');
+    return true;
+  }
+
+  bool updateMetadata(CoreMetadataSnapshot metadata) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('set_meta_failed', 'session_not_open');
+      return false;
+    }
+    final ok = session.setMetadata(metadata);
+    if (!ok) {
+      _setFailureFromSession('set_meta_failed', session);
+      return false;
+    }
+    _markChanged('set_meta_ok');
+    return true;
   }
 
   void selectSingle(String id) {
@@ -360,6 +596,8 @@ class ChartDocumentController extends ChangeNotifier {
     _memoryDraft = _DraftState(
       filePath: _currentFilePath,
       notes: List<CoreNoteSnapshot>.from(_cachedNotes),
+      bpms: List<CoreBpmSnapshot>.from(_cachedBpms),
+      metadata: _cachedMetadata,
       selectedIds: Set<String>.from(_selectedNoteIds),
       dirty: _dirty,
       revision: _revision,
@@ -385,18 +623,29 @@ class ChartDocumentController extends ChangeNotifier {
       _dirty = draft.dirty;
       _cacheRevision = -1;
       _cachedNotes.clear();
+      _cachedBpms.clear();
+      _cachedMetadata = CoreMetadataSnapshot.empty();
       _selectedNoteIds.clear();
       _editorMode = draft.mode;
 
-      var restored = 0;
-      var skipped = 0;
-      for (final note in draft.notes) {
-        final ok = _restoreNote(session, note);
-        if (ok) {
-          restored += 1;
-        } else {
-          skipped += 1;
-        }
+      if (!_replaceBpms(session, draft.bpms)) {
+        _setFailureFromSession('draft_restore_failed', session);
+        return;
+      }
+      if (!session.setMetadata(draft.metadata)) {
+        _setFailureFromSession('draft_restore_failed', session);
+        return;
+      }
+
+      final ops = draft.notes
+          .map(
+            (note) =>
+                CoreNoteBatchOp(opType: CoreNoteBatchOpType.add, note: note),
+          )
+          .toList();
+      if (!session.applyNoteBatch(ops)) {
+        _setFailureFromSession('draft_restore_failed', session);
+        return;
       }
 
       _syncRevisionFromCore();
@@ -408,7 +657,7 @@ class ChartDocumentController extends ChangeNotifier {
       _lastError = '';
       _lastErrorCode = 0;
       _lastErrorName = 'none';
-      _lastEventLog = 'draft_restored:$restored:$skipped';
+      _lastEventLog = 'draft_restored:${draft.notes.length}';
       notifyListeners();
     } catch (e) {
       _setFailure('draft_restore_failed', e.toString());
@@ -422,40 +671,70 @@ class ChartDocumentController extends ChangeNotifier {
     super.dispose();
   }
 
-  bool _restoreNote(CoreSessionPort session, CoreNoteSnapshot note) {
-    switch (note.type) {
-      case _noteTypeNormal:
-        return session.addNormalNote(
-          id: note.id,
-          measure: note.beat.measure,
-          numerator: note.beat.numerator,
-          denominator: note.beat.denominator,
-          x: note.x,
-        );
-      case _noteTypeRain:
-        return session.addRainNote(
-          id: note.id,
-          beat: note.beat,
-          endBeat: note.endBeat,
-          x: note.x,
-        );
-      case _noteTypeSound:
-        return session.addSoundNote(
-          id: note.id,
-          beat: note.beat,
-          sound: note.sound,
-          volume: note.volume,
-          offsetMs: note.offsetMs,
-        );
-      default:
+  bool _replaceBpms(CoreSessionPort session, List<CoreBpmSnapshot> target) {
+    final count = session.bpmCount;
+    for (var i = count - 1; i >= 0; i--) {
+      if (!session.removeBpm(i)) {
         return false;
+      }
     }
+
+    if (target.isEmpty) {
+      return session.addBpm(
+        beat: const CoreBeat(measure: 0, numerator: 0, denominator: 1),
+        bpm: 120.0,
+      );
+    }
+
+    for (final bpm in target) {
+      if (!session.addBpm(beat: bpm.beat, bpm: bpm.bpm)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _commitMutation(
+    String failEvent,
+    bool Function(CoreSessionPort session) mutate,
+    String successEvent, {
+    VoidCallback? beforeSuccess,
+  }) {
+    final session = _session;
+    if (session == null) {
+      _setFailure(failEvent, 'session_not_open');
+      return;
+    }
+
+    final ok = mutate(session);
+    if (!ok) {
+      _setFailureFromSession(failEvent, session);
+      return;
+    }
+
+    if (beforeSuccess != null) {
+      beforeSuccess();
+    }
+    _markChanged(successEvent);
+  }
+
+  bool _containsNoteId(String id) => _findNoteById(id) != null;
+
+  CoreNoteSnapshot? _findNoteById(String id) {
+    _refreshSnapshotsIfNeeded();
+    for (final note in _cachedNotes) {
+      if (note.id == id) {
+        return note;
+      }
+    }
+    return null;
   }
 
   void _markChanged(String event) {
     _dirty = true;
     _cacheRevision = -1;
     _syncRevisionFromCore();
+    _refreshSnapshotsIfNeeded();
     _selectedNoteIds.removeWhere((id) => !_containsNoteId(id));
     _lastError = '';
     _lastErrorCode = 0;
@@ -480,17 +759,18 @@ class ChartDocumentController extends ChangeNotifier {
     notifyListeners();
   }
 
-  CoreNoteSnapshot? _findNoteById(String id) {
-    _refreshSnapshotsIfNeeded();
-    for (final note in _cachedNotes) {
-      if (note.id == id) {
-        return note;
-      }
-    }
-    return null;
+  void reportExternalError({
+    required String event,
+    required String message,
+    int code = 0,
+    String name = 'none',
+  }) {
+    _lastEventLog = event;
+    _lastError = message;
+    _lastErrorCode = code;
+    _lastErrorName = name;
+    notifyListeners();
   }
-
-  bool _containsNoteId(String id) => _findNoteById(id) != null;
 
   void _syncRevisionFromCore() {
     final session = _session;
@@ -510,6 +790,8 @@ class ChartDocumentController extends ChangeNotifier {
     final session = _session;
     if (session == null) {
       _cachedNotes.clear();
+      _cachedBpms.clear();
+      _cachedMetadata = CoreMetadataSnapshot.empty();
       _cacheRevision = _revision;
       return;
     }
@@ -548,10 +830,55 @@ class ChartDocumentController extends ChangeNotifier {
     _cachedNotes
       ..clear()
       ..addAll(refreshed);
+    _cachedBpms
+      ..clear()
+      ..addAll(session.bpmSnapshots());
+    _cachedMetadata =
+        session.metadataSnapshot() ?? CoreMetadataSnapshot.empty();
+
     _selectedNoteIds.removeWhere(
       (id) => !_cachedNotes.any((note) => note.id == id),
     );
     _revision = coreRevision;
     _cacheRevision = coreRevision;
+  }
+
+  void _appendRecentFile(String path) {
+    _memoryRecentFiles.remove(path);
+    _memoryRecentFiles.insert(0, path);
+    if (_memoryRecentFiles.length > _recentFileLimit) {
+      _memoryRecentFiles.removeRange(
+        _recentFileLimit,
+        _memoryRecentFiles.length,
+      );
+    }
+  }
+
+  CoreBeat _doubleToBeat(double beat) {
+    final measure = beat.floor();
+    final frac = beat - measure;
+    const den = 192;
+    final num = (frac * den).round().clamp(0, den);
+    final gcd = _gcd(num, den);
+    return CoreBeat(
+      measure: measure,
+      numerator: num ~/ gcd,
+      denominator: den ~/ gcd,
+    );
+  }
+
+  double _beatToDouble(CoreBeat beat) {
+    return beat.measure + beat.numerator / max(1, beat.denominator);
+  }
+
+  int _gcd(int a, int b) {
+    var x = a.abs();
+    var y = b.abs();
+    while (y != 0) {
+      final t = x % y;
+      x = y;
+      y = t;
+    }
+    return x == 0 ? 1 : x;
   }
 }
