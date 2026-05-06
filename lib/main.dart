@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -76,6 +77,15 @@ class MobileEditorPage extends StatefulWidget {
 
 class _MobileEditorPageState extends State<MobileEditorPage>
     with WidgetsBindingObserver {
+  static const double _visibleBeatWindow = 16.0;
+  static const List<double> _playbackRates = <double>[
+    0.5,
+    0.75,
+    1.0,
+    1.25,
+    1.5,
+  ];
+
   late final ChartDocumentController _controller;
   late final ChartFilePickerPort _filePicker;
   late final ChartArchivePort _chartArchive;
@@ -137,7 +147,20 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     if (_difficultyCtrl.text != meta.difficulty) {
       _difficultyCtrl.text = meta.difficulty;
     }
+    _softFollowPlaybackHead();
     setState(() {});
+  }
+
+  void _softFollowPlaybackHead() {
+    if (_controller.playbackStatus != PlaybackStatus.playing) {
+      return;
+    }
+    final head = _controller.playheadBeat;
+    final low = _viewBeat;
+    final high = _viewBeat + _visibleBeatWindow;
+    if (head < low || head > high) {
+      _viewBeat = (head - _visibleBeatWindow * 0.75).clamp(0.0, 1000000.0);
+    }
   }
 
   Future<void> _openChart() async {
@@ -340,6 +363,48 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     );
   }
 
+  Future<void> _togglePlayPause() async {
+    final status = _controller.playbackStatus;
+    if (status == PlaybackStatus.playing) {
+      await _controller.pause();
+      return;
+    }
+    if (status == PlaybackStatus.idle || status == PlaybackStatus.error) {
+      final prepared = await _controller.prepareAudioFromCurrentChart();
+      if (!prepared) {
+        return;
+      }
+    }
+    await _controller.play();
+  }
+
+  Future<void> _stopPlayback() async {
+    await _controller.stopAndReset();
+  }
+
+  Future<void> _setPlaybackRate(double rate) async {
+    await _controller.setPlaybackRate(rate);
+  }
+
+  void _seekFromDensity(double beat) {
+    setState(() {
+      _viewBeat = (beat - _visibleBeatWindow * 0.75).clamp(0.0, 1000000.0);
+    });
+    unawaited(_controller.seekToBeat(beat));
+  }
+
+  String _formatMs(int ms) {
+    final clamped = ms < 0 ? 0 : ms;
+    final totalSeconds = clamped ~/ 1000;
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    final hundredths = (clamped % 1000) ~/ 10;
+    final mm = minutes.toString().padLeft(2, '0');
+    final ss = seconds.toString().padLeft(2, '0');
+    final hh = hundredths.toString().padLeft(2, '0');
+    return '$mm:$ss.$hh';
+  }
+
   void _applyMeta() {
     final next = _controller.metadata.copyWith(
       title: _titleCtrl.text.trim(),
@@ -370,7 +435,8 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     _controller.moveSelectedNoteTo(beat: beat, x: x);
   }
 
-  void _handleLifecycleSave() {
+  void _handleLifecyclePause() {
+    unawaited(_controller.handleAppPaused());
     if (_controller.sessionOpen && _controller.dirty) {
       _controller.saveDraftToMemory();
     }
@@ -383,110 +449,163 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     final bpms = _controller.bpms;
     final startupReady = widget.forceStartupReady ?? (report?.success ?? false);
     final canOperate = startupReady && _controller.sessionOpen;
+    final playbackStatus = _controller.playbackStatus;
+    final isPlaying = playbackStatus == PlaybackStatus.playing;
+    final canPlayback = canOperate;
+    final rateLabel = '${_controller.playbackRate.toStringAsFixed(2)}x';
+    final durationLabel = _controller.durationMs > 0
+        ? _formatMs(_controller.durationMs)
+        : '--:--.--';
+    final positionLabel = _formatMs(_controller.playheadMs);
+    final beatLabel = _controller.playheadBeat.toStringAsFixed(3);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Malody Catch Mobile Editor')),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton(
-                  onPressed: _controller.runStartupSelfCheck,
-                  child: const Text('Startup Check'),
-                ),
-                FilledButton(
-                  onPressed: startupReady ? _controller.openSession : null,
-                  child: const Text('Open Session'),
-                ),
-                FilledButton(
-                  onPressed: startupReady ? _openChart : null,
-                  child: const Text('Open .mc'),
-                ),
-                FilledButton(
-                  onPressed: canOperate ? _saveChart : null,
-                  child: const Text('Save .mc'),
-                ),
-                FilledButton(
-                  onPressed: canOperate ? _exportMcz : null,
-                  child: const Text('Export .mcz'),
-                ),
-                FilledButton(
-                  onPressed: canOperate && _controller.canUndo
-                      ? _controller.undo
-                      : null,
-                  child: const Text('Undo'),
-                ),
-                FilledButton(
-                  onPressed: canOperate && _controller.canRedo
-                      ? _controller.redo
-                      : null,
-                  child: const Text('Redo'),
-                ),
-                FilledButton(
-                  onPressed: canOperate ? _controller.closeSession : null,
-                  child: const Text('Close Session'),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'file: ${_controller.currentFilePath ?? '<none>'}',
-                  ),
-                ),
-                Text('notes: ${notes.length}'),
-                const SizedBox(width: 12),
-                Text('bpms: ${bpms.length}'),
-                const SizedBox(width: 12),
-                Text('dirty: ${_controller.dirty}'),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: EditorMode.values
-                  .map(
-                    (mode) => ChoiceChip(
-                      label: Text(mode.name),
-                      selected: _controller.editorMode == mode,
-                      onSelected: canOperate
-                          ? (_) => _controller.setEditorMode(mode)
-                          : null,
-                    ),
-                  )
-                  .toList(),
-            ),
-          ),
-          if (_controller.recentFiles.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: _controller.recentFiles
-                      .map(
-                        (path) => ActionChip(
-                          label: Text(path, overflow: TextOverflow.ellipsis),
-                          onPressed: () => _controller.openChartFile(path),
+          SizedBox(
+            height: 192,
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton(
+                          onPressed: _controller.runStartupSelfCheck,
+                          child: const Text('Startup Check'),
                         ),
-                      )
-                      .toList(),
-                ),
+                        FilledButton(
+                          onPressed: startupReady
+                              ? _controller.openSession
+                              : null,
+                          child: const Text('Open Session'),
+                        ),
+                        FilledButton(
+                          onPressed: startupReady ? _openChart : null,
+                          child: const Text('Open .mc'),
+                        ),
+                        FilledButton(
+                          onPressed: canOperate ? _saveChart : null,
+                          child: const Text('Save .mc'),
+                        ),
+                        FilledButton(
+                          onPressed: canOperate ? _exportMcz : null,
+                          child: const Text('Export .mcz'),
+                        ),
+                        FilledButton(
+                          onPressed: canPlayback ? _togglePlayPause : null,
+                          child: Text(isPlaying ? 'Pause' : 'Play'),
+                        ),
+                        FilledButton(
+                          onPressed: canPlayback ? _stopPlayback : null,
+                          child: const Text('Stop'),
+                        ),
+                        PopupMenuButton<double>(
+                          enabled: canPlayback,
+                          tooltip: 'Playback Rate',
+                          onSelected: (value) =>
+                              unawaited(_setPlaybackRate(value)),
+                          itemBuilder: (context) => _playbackRates
+                              .map(
+                                (value) => PopupMenuItem<double>(
+                                  value: value,
+                                  child: Text('${value.toStringAsFixed(2)}x'),
+                                ),
+                              )
+                              .toList(),
+                          child: Chip(label: Text('Rate $rateLabel')),
+                        ),
+                        Chip(
+                          label: Text('Time $positionLabel / $durationLabel'),
+                        ),
+                        Chip(label: Text('Beat $beatLabel')),
+                        FilledButton(
+                          onPressed: canOperate && _controller.canUndo
+                              ? _controller.undo
+                              : null,
+                          child: const Text('Undo'),
+                        ),
+                        FilledButton(
+                          onPressed: canOperate && _controller.canRedo
+                              ? _controller.redo
+                              : null,
+                          child: const Text('Redo'),
+                        ),
+                        FilledButton(
+                          onPressed: canOperate
+                              ? _controller.closeSession
+                              : null,
+                          child: const Text('Close Session'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'file: ${_controller.currentFilePath ?? '<none>'}',
+                          ),
+                        ),
+                        Text('notes: ${notes.length}'),
+                        const SizedBox(width: 12),
+                        Text('bpms: ${bpms.length}'),
+                        const SizedBox(width: 12),
+                        Text('dirty: ${_controller.dirty}'),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: EditorMode.values
+                          .map(
+                            (mode) => ChoiceChip(
+                              label: Text(mode.name),
+                              selected: _controller.editorMode == mode,
+                              onSelected: canOperate
+                                  ? (_) => _controller.setEditorMode(mode)
+                                  : null,
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                  if (_controller.recentFiles.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: _controller.recentFiles
+                              .map(
+                                (path) => ActionChip(
+                                  label: Text(
+                                    path,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  onPressed: () =>
+                                      _controller.openChartFile(path),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
+          ),
           Expanded(
             child: Row(
               children: [
@@ -499,6 +618,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                       selectedIds: _controller.selectedNoteIds,
                       mode: _controller.editorMode,
                       viewBeat: _viewBeat,
+                      playheadBeat: _controller.playheadBeat,
                       onViewBeatChanged: (value) =>
                           setState(() => _viewBeat = value),
                       onHitNote: _controller.handleNoteTap,
@@ -517,8 +637,8 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                   child: Card(
                     child: SimpleDensityBar(
                       notes: notes,
-                      viewBeat: _viewBeat,
-                      onSeekBeat: (value) => setState(() => _viewBeat = value),
+                      playheadBeat: _controller.playheadBeat,
+                      onSeekBeat: _seekFromDensity,
                     ),
                   ),
                 ),
@@ -599,7 +719,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
-      _handleLifecycleSave();
+      _handleLifecyclePause();
     }
   }
 }

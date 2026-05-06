@@ -7,8 +7,10 @@ import 'package:malody_catch_mobile/core/mc_chart_io.dart';
 import 'package:malody_catch_mobile/core/native_core.dart';
 import 'package:malody_catch_mobile/io/chart_file_picker.dart';
 import 'package:malody_catch_mobile/main.dart';
+import 'package:malody_catch_mobile/ui/simple_density_bar.dart';
 
 import 'support/fake_chart_io_ports.dart';
+import 'support/fake_chart_audio.dart';
 import 'support/fake_core_session.dart';
 
 class FakeChartFilePicker implements ChartFilePickerPort {
@@ -67,6 +69,163 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save .mc'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Export .mcz'), findsOneWidget);
     expect(find.byType(Scaffold), findsOneWidget);
+  });
+
+  testWidgets('playback controls update status and rate', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    late FakeChartAudio fakeAudio;
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () {
+        fakeAudio = FakeChartAudio(
+          initialDuration: const Duration(seconds: 90),
+        );
+        return fakeAudio;
+      },
+    );
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'PlaybackUI',
+        audioFile: 'audio/song.ogg',
+        offsetMs: 120,
+      ),
+    );
+    final root = Directory.systemTemp.createTempSync('mobile_playback_widget');
+    final chartPath = '${root.path}${Platform.pathSeparator}playback.mc';
+    controller.saveChart(path: chartPath);
+    final audioFile = File(
+      '${root.path}${Platform.pathSeparator}audio${Platform.pathSeparator}song.ogg',
+    );
+    audioFile.parent.createSync(recursive: true);
+    audioFile.writeAsStringSync('audio');
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Play'));
+    await tester.pumpAndSettle();
+    expect(controller.playbackStatus, PlaybackStatus.playing);
+    expect(find.widgetWithText(FilledButton, 'Pause'), findsOneWidget);
+
+    await tester.tap(find.text('Rate 1.00x'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('1.25x').last);
+    await tester.pumpAndSettle();
+    expect(controller.playbackRate, 1.25);
+
+    fakeAudio.emitPosition(const Duration(milliseconds: 1600));
+    await tester.pumpAndSettle();
+    expect(controller.playheadMs, 1600);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
+    await tester.pumpAndSettle();
+    expect(controller.playheadMs, 0);
+
+    root.deleteSync(recursive: true);
+  });
+
+  testWidgets('density bar seek callback updates controller playhead', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () =>
+          FakeChartAudio(initialDuration: const Duration(seconds: 120)),
+    );
+    controller.openSession();
+    controller.addNormalNote(measure: 12, numerator: 0, denominator: 1, x: 200);
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'SeekUI',
+        audioFile: 'audio/song.ogg',
+      ),
+    );
+    final root = Directory.systemTemp.createTempSync('mobile_density_seek');
+    final chartPath = '${root.path}${Platform.pathSeparator}seek_case.mc';
+    controller.saveChart(path: chartPath);
+    final audioPath = File(
+      '${root.path}${Platform.pathSeparator}audio${Platform.pathSeparator}song.ogg',
+    );
+    audioPath.parent.createSync(recursive: true);
+    audioPath.writeAsStringSync('audio');
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Play'));
+    await tester.pumpAndSettle();
+
+    final density = find.byType(SimpleDensityBar);
+    expect(density, findsOneWidget);
+    final densityWidget = tester.widget<SimpleDensityBar>(density);
+    densityWidget.onSeekBeat(12.0);
+    await tester.pumpAndSettle();
+
+    expect(controller.playheadMs, greaterThan(0));
+    expect(controller.playheadBeat, greaterThan(0));
+
+    root.deleteSync(recursive: true);
+  });
+
+  testWidgets('playback missing audio shows error text', (
+    WidgetTester tester,
+  ) async {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () => FakeChartAudio(),
+    );
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'MissingAudioUI',
+        audioFile: 'audio/missing.ogg',
+      ),
+    );
+    final root = Directory.systemTemp.createTempSync('mobile_missing_audio_ui');
+    final chartPath = '${root.path}${Platform.pathSeparator}missing_audio.mc';
+    controller.saveChart(path: chartPath);
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Play'));
+    await tester.pumpAndSettle();
+
+    expect(
+      controller.lastError,
+      contains('audio_playback_audio_source_missing'),
+    );
+    await tester.drag(find.byType(ListView).last, const Offset(0, -400));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('error: audio_playback_'), findsOneWidget);
+
+    root.deleteSync(recursive: true);
   });
 
   testWidgets('Open .mc uses picker path and imports chart', (

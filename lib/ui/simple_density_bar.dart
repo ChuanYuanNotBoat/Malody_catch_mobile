@@ -8,12 +8,12 @@ class SimpleDensityBar extends StatelessWidget {
   const SimpleDensityBar({
     super.key,
     required this.notes,
-    required this.viewBeat,
+    required this.playheadBeat,
     required this.onSeekBeat,
   });
 
   final List<CoreNoteSnapshot> notes;
-  final double viewBeat;
+  final double playheadBeat;
   final ValueChanged<double> onSeekBeat;
 
   @override
@@ -25,7 +25,7 @@ class SimpleDensityBar extends StatelessWidget {
       onVerticalDragUpdate: (details) =>
           _seek(details.localPosition.dy, context.size?.height ?? 1),
       child: CustomPaint(
-        painter: _DensityPainter(notes: notes, viewBeat: viewBeat),
+        painter: _DensityPainter(notes: notes, playheadBeat: playheadBeat),
         child: const SizedBox(width: 56),
       ),
     );
@@ -56,10 +56,10 @@ class SimpleDensityBar extends StatelessWidget {
 }
 
 class _DensityPainter extends CustomPainter {
-  _DensityPainter({required this.notes, required this.viewBeat});
+  _DensityPainter({required this.notes, required this.playheadBeat});
 
   final List<CoreNoteSnapshot> notes;
-  final double viewBeat;
+  final double playheadBeat;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -91,7 +91,7 @@ class _DensityPainter extends CustomPainter {
     }
 
     final lineY =
-        size.height - (viewBeat / maxBeat).clamp(0.0, 1.0) * size.height;
+        size.height - (playheadBeat / maxBeat).clamp(0.0, 1.0) * size.height;
     final line = Paint()
       ..color = const Color(0xFFFF7A59)
       ..strokeWidth = 2;
@@ -100,6 +100,7 @@ class _DensityPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DensityPainter oldDelegate) {
-    return oldDelegate.notes != notes || oldDelegate.viewBeat != viewBeat;
+    return oldDelegate.notes != notes ||
+        oldDelegate.playheadBeat != playheadBeat;
   }
 }

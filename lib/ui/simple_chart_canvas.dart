@@ -12,6 +12,7 @@ class SimpleChartCanvas extends StatefulWidget {
     required this.selectedIds,
     required this.mode,
     required this.viewBeat,
+    required this.playheadBeat,
     required this.onViewBeatChanged,
     required this.onHitNote,
     required this.onPlaceNormal,
@@ -23,6 +24,7 @@ class SimpleChartCanvas extends StatefulWidget {
   final Set<String> selectedIds;
   final EditorMode mode;
   final double viewBeat;
+  final double playheadBeat;
   final ValueChanged<double> onViewBeatChanged;
   final ValueChanged<String> onHitNote;
   final void Function(double beat, int x) onPlaceNormal;
@@ -50,6 +52,7 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
           notes: widget.notes,
           selectedIds: widget.selectedIds,
           viewBeat: widget.viewBeat,
+          playheadBeat: widget.playheadBeat,
           visibleBeats: _visibleBeats,
         ),
         child: const SizedBox.expand(),
@@ -143,12 +146,14 @@ class _CanvasPainter extends CustomPainter {
     required this.notes,
     required this.selectedIds,
     required this.viewBeat,
+    required this.playheadBeat,
     required this.visibleBeats,
   });
 
   final List<CoreNoteSnapshot> notes;
   final Set<String> selectedIds;
   final double viewBeat;
+  final double playheadBeat;
   final double visibleBeats;
 
   @override
@@ -212,12 +217,27 @@ class _CanvasPainter extends CustomPainter {
         );
       }
     }
+
+    final playheadRatio = ((playheadBeat - viewBeat) / visibleBeats).clamp(
+      0.0,
+      1.0,
+    );
+    final playheadY = size.height - playheadRatio * size.height;
+    final playheadLine = Paint()
+      ..color = const Color(0xFFFF7A59)
+      ..strokeWidth = 2;
+    canvas.drawLine(
+      Offset(0, playheadY),
+      Offset(size.width, playheadY),
+      playheadLine,
+    );
   }
 
   @override
   bool shouldRepaint(covariant _CanvasPainter oldDelegate) {
     return oldDelegate.notes != notes ||
         oldDelegate.selectedIds != selectedIds ||
-        oldDelegate.viewBeat != viewBeat;
+        oldDelegate.viewBeat != viewBeat ||
+        oldDelegate.playheadBeat != playheadBeat;
   }
 }

@@ -25,6 +25,8 @@ chart-editing behavior is expected to come from the sibling
   secure unzip -> chart selection -> referenced asset copy -> workspace rewrite.
 - `.mcz` export flow is enabled:
   save latest `.mc` -> package `0/<chart>.mc` + referenced assets only.
+- Main-audio playback link is enabled with `just_audio`:
+  play/pause/seek/rate + canvas/density playhead sync.
 - Save flow supports both direct overwrite (known path) and
   directory-pick + filename input (new file).
 - Android `arm64-v8a` native library is bundled at
