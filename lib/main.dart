@@ -1048,6 +1048,192 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     );
   }
 
+  Widget _buildLeftToolsPanel(bool canOperate) {
+    const modeOrder = <EditorMode>[
+      EditorMode.placeNormal,
+      EditorMode.placeRain,
+      EditorMode.delete,
+      EditorMode.select,
+    ];
+    final beatStep = 1 / _controller.timeDivision;
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        const Text(
+          'Mode',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        ...modeOrder.map(
+          (mode) => RadioListTile<EditorMode>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(_modeLabel(mode)),
+            value: mode,
+            groupValue: _controller.editorMode,
+            onChanged: canOperate
+                ? (value) {
+                    if (value == null) {
+                      return;
+                    }
+                    _controller.setEditorMode(value);
+                    if (value != EditorMode.placeRain &&
+                        (_pendingRainStartBeat != null ||
+                            _pendingRainLaneX != null)) {
+                      setState(() {
+                        _pendingRainStartBeat = null;
+                        _pendingRainLaneX = null;
+                      });
+                    }
+                  }
+                : null,
+          ),
+        ),
+        if (_pendingRainStartBeat != null)
+          Text(
+            'Rain start: ${_pendingRainStartBeat!.toStringAsFixed(3)}',
+            style: const TextStyle(color: Colors.amber),
+          ),
+        if (_pendingRainStartBeat != null)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () {
+                setState(() {
+                  _pendingRainStartBeat = null;
+                  _pendingRainLaneX = null;
+                });
+              },
+              child: const Text('Cancel Rain Start'),
+            ),
+          ),
+        const Divider(height: 18),
+        const Text(
+          'Grid',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        PopupMenuButton<int>(
+          enabled: canOperate,
+          onSelected: _controller.setTimeDivision,
+          itemBuilder: (context) => _snapDivisions
+              .map(
+                (division) => PopupMenuItem<int>(
+                  value: division,
+                  child: Text('1/$division'),
+                ),
+              )
+              .toList(),
+          child: Chip(
+            label: Text('Time Division 1/${_controller.timeDivision}'),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            const Expanded(child: Text('Grid Snap')),
+            Switch(
+              value: _controller.gridSnapEnabled,
+              onChanged: canOperate ? _controller.setGridSnapEnabled : null,
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        PopupMenuButton<int>(
+          enabled: canOperate,
+          onSelected: _controller.setGridDivision,
+          itemBuilder: (context) => List<int>.generate(16, (i) => i + 4)
+              .map(
+                (division) => PopupMenuItem<int>(
+                  value: division,
+                  child: Text('Grid $division'),
+                ),
+              )
+              .toList(),
+          child: Chip(label: Text('Grid ${_controller.gridDivision}')),
+        ),
+        const SizedBox(height: 6),
+        OutlinedButton(
+          onPressed: canOperate ? () => unawaited(_showGridSettingsDialog()) : null,
+          child: const Text('Grid Settings'),
+        ),
+        const Divider(height: 18),
+        const Text(
+          'Selection',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        Text('Selected: ${_controller.selectedCount}'),
+        const SizedBox(height: 8),
+        FilledButton.tonal(
+          onPressed: canOperate ? _controller.selectAllNotes : null,
+          child: const Text('Select All'),
+        ),
+        const SizedBox(height: 6),
+        FilledButton.tonal(
+          onPressed: canOperate && _controller.selectedCount > 0
+              ? _deleteSelectedNotes
+              : null,
+          child: const Text('Delete'),
+        ),
+        const SizedBox(height: 6),
+        FilledButton.tonal(
+          onPressed: canOperate && _controller.selectedCount > 0
+              ? _copySelectedNotes
+              : null,
+          child: const Text('Copy'),
+        ),
+        const SizedBox(height: 6),
+        FilledButton.tonal(
+          onPressed: canOperate && _controller.hasClipboardNotes
+              ? _pasteNotesAtViewBeat
+              : null,
+          child: const Text('Paste'),
+        ),
+        const SizedBox(height: 6),
+        OutlinedButton(
+          onPressed: canOperate && _controller.selectedCount > 0
+              ? _controller.clearSelection
+              : null,
+          child: const Text('Clear Selection'),
+        ),
+        const SizedBox(height: 8),
+        const Text('Nudge'),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            OutlinedButton(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionBeat(-beatStep)
+                  : null,
+              child: Text('-1/${_controller.timeDivision}'),
+            ),
+            OutlinedButton(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionBeat(beatStep)
+                  : null,
+              child: Text('+1/${_controller.timeDivision}'),
+            ),
+            OutlinedButton(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionX(-8)
+                  : null,
+              child: const Text('X -8'),
+            ),
+            OutlinedButton(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionX(8)
+                  : null,
+              child: const Text('X +8'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildDebugPanel() {
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -1061,27 +1247,33 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     );
   }
 
-  Widget _buildInspectorPanel(bool canOperate, List<CoreBpmSnapshot> bpms) {
+  Widget _buildInspectorPanel({
+    required bool canOperate,
+    required List<CoreBpmSnapshot> bpms,
+    required bool includeToolsTab,
+  }) {
+    final tabs = <Tab>[
+      if (includeToolsTab) const Tab(text: 'Tools'),
+      const Tab(text: 'Meta'),
+      const Tab(text: 'BPM'),
+      const Tab(text: 'Edit'),
+      const Tab(text: 'Debug'),
+    ];
+    final views = <Widget>[
+      if (includeToolsTab) _buildLeftToolsPanel(canOperate),
+      _buildMetaPanel(canOperate),
+      _buildBpmPanel(canOperate, bpms),
+      _buildEditPanel(canOperate),
+      _buildDebugPanel(),
+    ];
     return DefaultTabController(
-      length: 4,
+      length: tabs.length,
       child: Column(
         children: [
-          const TabBar(
-            tabs: [
-              Tab(text: 'Meta'),
-              Tab(text: 'BPM'),
-              Tab(text: 'Edit'),
-              Tab(text: 'Debug'),
-            ],
-          ),
+          TabBar(tabs: tabs),
           Expanded(
             child: TabBarView(
-              children: [
-                _buildMetaPanel(canOperate),
-                _buildBpmPanel(canOperate, bpms),
-                _buildEditPanel(canOperate),
-                _buildDebugPanel(),
-              ],
+              children: views,
             ),
           ),
         ],
@@ -1101,13 +1293,6 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     required List<CoreNoteSnapshot> notes,
     required List<CoreBpmSnapshot> bpms,
   }) {
-    const modeOrder = <EditorMode>[
-      EditorMode.placeNormal,
-      EditorMode.placeRain,
-      EditorMode.delete,
-      EditorMode.select,
-    ];
-
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
       child: Padding(
@@ -1200,45 +1385,6 @@ class _MobileEditorPageState extends State<MobileEditorPage>
               runSpacing: 8,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                PopupMenuButton<int>(
-                  enabled: canOperate,
-                  onSelected: _controller.setTimeDivision,
-                  itemBuilder: (context) => _snapDivisions
-                      .map(
-                        (division) => PopupMenuItem<int>(
-                          value: division,
-                          child: Text('1/$division'),
-                        ),
-                      )
-                      .toList(),
-                  child: Chip(
-                    label: Text('Time Division 1/${_controller.timeDivision}'),
-                  ),
-                ),
-                FilterChip(
-                  label: const Text('Grid Snap'),
-                  selected: _controller.gridSnapEnabled,
-                  onSelected: canOperate ? _controller.setGridSnapEnabled : null,
-                ),
-                PopupMenuButton<int>(
-                  enabled: canOperate,
-                  onSelected: _controller.setGridDivision,
-                  itemBuilder: (context) => List<int>.generate(16, (i) => i + 4)
-                      .map(
-                        (division) => PopupMenuItem<int>(
-                          value: division,
-                          child: Text('Grid $division'),
-                        ),
-                      )
-                      .toList(),
-                  child: Chip(label: Text('Grid ${_controller.gridDivision}')),
-                ),
-                OutlinedButton(
-                  onPressed: canOperate
-                      ? () => unawaited(_showGridSettingsDialog())
-                      : null,
-                  child: const Text('Grid Settings'),
-                ),
                 SizedBox(
                   width: 120,
                   child: TextField(
@@ -1258,88 +1404,9 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                       : null,
                   child: const Text('Seek'),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: modeOrder
-                  .map(
-                    (mode) => ChoiceChip(
-                      label: Text(_modeLabel(mode)),
-                      selected: _controller.editorMode == mode,
-                      onSelected: canOperate
-                          ? (_) {
-                              _controller.setEditorMode(mode);
-                              if (mode != EditorMode.placeRain &&
-                                  (_pendingRainStartBeat != null ||
-                                      _pendingRainLaneX != null)) {
-                                setState(() {
-                                  _pendingRainStartBeat = null;
-                                  _pendingRainLaneX = null;
-                                });
-                              }
-                            }
-                          : null,
-                    ),
-                  )
-                  .toList(),
-            ),
-            if (_pendingRainStartBeat != null) ...[
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Rain start armed at beat ${_pendingRainStartBeat!.toStringAsFixed(3)} (tap again to set end)',
-                      style: const TextStyle(color: Colors.amber),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      setState(() {
-                        _pendingRainStartBeat = null;
-                        _pendingRainLaneX = null;
-                      });
-                    },
-                    child: const Text('Cancel'),
-                  ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
                 ActionChip(
                   label: Text('Selected ${_controller.selectedCount}'),
                   onPressed: null,
-                ),
-                FilledButton.tonal(
-                  onPressed: canOperate && _controller.selectedCount > 0
-                      ? _deleteSelectedNotes
-                      : null,
-                  child: const Text('Delete'),
-                ),
-                FilledButton.tonal(
-                  onPressed: canOperate && _controller.selectedCount > 0
-                      ? _copySelectedNotes
-                      : null,
-                  child: const Text('Copy'),
-                ),
-                FilledButton.tonal(
-                  onPressed: canOperate && _controller.hasClipboardNotes
-                      ? _pasteNotesAtViewBeat
-                      : null,
-                  child: const Text('Paste'),
-                ),
-                OutlinedButton(
-                  onPressed: canOperate && _controller.selectedCount > 0
-                      ? _controller.clearSelection
-                      : null,
-                  child: const Text('Clear'),
                 ),
               ],
             ),
@@ -1432,6 +1499,13 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     if (desktopLike) {
       return Row(
         children: [
+          SizedBox(
+            width: 260,
+            child: Card(
+              margin: const EdgeInsets.fromLTRB(12, 12, 0, 12),
+              child: _buildLeftToolsPanel(canOperate),
+            ),
+          ),
           Expanded(
             child: Row(
               children: [
@@ -1444,7 +1518,11 @@ class _MobileEditorPageState extends State<MobileEditorPage>
             width: 340,
             child: Card(
               margin: const EdgeInsets.fromLTRB(0, 12, 12, 12),
-              child: _buildInspectorPanel(canOperate, bpms),
+              child: _buildInspectorPanel(
+                canOperate: canOperate,
+                bpms: bpms,
+                includeToolsTab: false,
+              ),
             ),
           ),
         ],
@@ -1465,7 +1543,11 @@ class _MobileEditorPageState extends State<MobileEditorPage>
           height: 300,
           child: Card(
             margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: _buildInspectorPanel(canOperate, bpms),
+            child: _buildInspectorPanel(
+              canOperate: canOperate,
+              bpms: bpms,
+              includeToolsTab: true,
+            ),
           ),
         ),
       ],
