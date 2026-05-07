@@ -147,6 +147,53 @@ void main() {
     expect(beats[1], closeTo(2.5, 0.001));
   });
 
+  test('controller supports rain placement between two beats', () {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+
+    final ok = controller.addRainNoteBetweenBeats(
+      startBeat: 7.75,
+      endBeat: 6.25,
+      x: 260,
+    );
+    expect(ok, isTrue);
+    expect(controller.notes.length, 1);
+    final rain = controller.notes.single;
+    expect(rain.type, 3);
+    final start =
+        rain.beat.measure + rain.beat.numerator / rain.beat.denominator;
+    final end =
+        rain.endBeat.measure +
+        rain.endBeat.numerator / rain.endBeat.denominator;
+    expect(start, closeTo(6.25, 0.001));
+    expect(end, closeTo(7.75, 0.001));
+  });
+
+  test('controller select notes in region supports rain overlap', () {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 120);
+    controller.addRainNoteBetweenBeats(startBeat: 4.0, endBeat: 6.0, x: 200);
+    controller.addNormalNote(measure: 10, numerator: 0, denominator: 1, x: 420);
+
+    controller.selectNotesInRegion(
+      startBeat: 5.5,
+      endBeat: 1.5,
+      startX: 80,
+      endX: 240,
+    );
+
+    expect(controller.selectedCount, 2);
+    final selectedIds = controller.selectedNoteIds.toSet();
+    expect(selectedIds.contains(controller.notes[0].id), isTrue);
+    expect(selectedIds.contains(controller.notes[1].id), isTrue);
+    expect(selectedIds.contains(controller.notes[2].id), isFalse);
+  });
+
   test('controller .mc save and reopen roundtrip', () {
     final controller = ChartDocumentController(
       sessionFactory: () => FakeCoreSession(),

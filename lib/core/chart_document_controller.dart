@@ -1014,6 +1014,25 @@ class ChartDocumentController extends ChangeNotifier {
     addRainNote(beat: start, endBeat: end, x: snappedX);
   }
 
+  bool addRainNoteBetweenBeats({
+    required double startBeat,
+    required double endBeat,
+    required int x,
+  }) {
+    final snappedStart = _snapBeatForEdit(startBeat);
+    final snappedEnd = _snapBeatForEdit(endBeat);
+    final low = min(snappedStart, snappedEnd);
+    final high = max(snappedStart, snappedEnd);
+    if (high <= low) {
+      _setFailure('add_rain_failed', 'rain_end_must_be_later_than_start');
+      return false;
+    }
+    final start = _doubleToBeat(low);
+    final end = _doubleToBeat(high);
+    addRainNote(beat: start, endBeat: end, x: _snapLaneXForEdit(x));
+    return true;
+  }
+
   void moveSelectedRainNote({
     required CoreBeat beat,
     required CoreBeat endBeat,
@@ -1265,6 +1284,56 @@ class ChartDocumentController extends ChangeNotifier {
     _selectedNoteIds.clear();
     _lastError = '';
     _lastEventLog = 'selection_cleared';
+    notifyListeners();
+  }
+
+  void selectNotesInRegion({
+    required double startBeat,
+    required double endBeat,
+    required int startX,
+    required int endX,
+    bool additive = false,
+  }) {
+    _refreshSnapshotsIfNeeded();
+    if (_cachedNotes.isEmpty) {
+      _setFailure('select_region_failed', 'no_notes');
+      return;
+    }
+
+    final minBeat = min(startBeat, endBeat);
+    final maxBeat = max(startBeat, endBeat);
+    final minX = min(startX, endX);
+    final maxX = max(startX, endX);
+
+    final matchedIds = <String>{};
+    for (final note in _cachedNotes) {
+      final noteX = note.x.clamp(0, 512);
+      if (noteX < minX || noteX > maxX) {
+        continue;
+      }
+      final noteBeat = _beatToDouble(note.beat);
+      if (note.type == _noteTypeRain) {
+        final endBeatValue = _beatToDouble(note.endBeat);
+        final low = min(noteBeat, endBeatValue);
+        final high = max(noteBeat, endBeatValue);
+        if (high >= minBeat && low <= maxBeat) {
+          matchedIds.add(note.id);
+        }
+        continue;
+      }
+      if (noteBeat >= minBeat && noteBeat <= maxBeat) {
+        matchedIds.add(note.id);
+      }
+    }
+
+    if (!additive) {
+      _selectedNoteIds.clear();
+    }
+    _selectedNoteIds.addAll(matchedIds);
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = 'select_region_ok:${matchedIds.length}';
     notifyListeners();
   }
 

@@ -119,6 +119,8 @@ class _MobileEditorPageState extends State<MobileEditorPage>
 
   double _viewBeat = 0;
   double _visibleBeats = _defaultVisibleBeats;
+  double? _pendingRainStartBeat;
+  int? _pendingRainLaneX;
 
   @override
   void initState() {
@@ -770,15 +772,48 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   }
 
   void _handleCanvasPlaceNormal(double beat, int x) {
+    _pendingRainStartBeat = null;
+    _pendingRainLaneX = null;
     _controller.addNormalNoteAtBeat(beat: beat, x: x);
   }
 
   void _handleCanvasPlaceRain(double beat, int x) {
-    _controller.addRainNoteAtBeat(beat: beat, x: x);
+    final pendingStart = _pendingRainStartBeat;
+    if (pendingStart == null) {
+      setState(() {
+        _pendingRainStartBeat = beat;
+        _pendingRainLaneX = x;
+      });
+      return;
+    }
+    final laneX = _pendingRainLaneX ?? x;
+    _controller.addRainNoteBetweenBeats(startBeat: pendingStart, endBeat: beat, x: laneX);
+    setState(() {
+      _pendingRainStartBeat = null;
+      _pendingRainLaneX = null;
+    });
   }
 
   void _handleMoveSelected(double beat, int x) {
     _controller.moveSelectedNoteTo(beat: beat, x: x);
+  }
+
+  void _handleMoveSelectedDelta(double beatDelta, int xDelta) {
+    _controller.nudgeSelectedNotes(beatDelta: beatDelta, xDelta: xDelta);
+  }
+
+  void _handleCanvasSelectRegion({
+    required double startBeat,
+    required double endBeat,
+    required int startX,
+    required int endX,
+  }) {
+    _controller.selectNotesInRegion(
+      startBeat: startBeat,
+      endBeat: endBeat,
+      startX: startX,
+      endX: endX,
+    );
   }
 
   String _modeLabel(EditorMode mode) {
@@ -1235,12 +1270,44 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                       label: Text(_modeLabel(mode)),
                       selected: _controller.editorMode == mode,
                       onSelected: canOperate
-                          ? (_) => _controller.setEditorMode(mode)
+                          ? (_) {
+                              _controller.setEditorMode(mode);
+                              if (mode != EditorMode.placeRain &&
+                                  (_pendingRainStartBeat != null ||
+                                      _pendingRainLaneX != null)) {
+                                setState(() {
+                                  _pendingRainStartBeat = null;
+                                  _pendingRainLaneX = null;
+                                });
+                              }
+                            }
                           : null,
                     ),
                   )
                   .toList(),
             ),
+            if (_pendingRainStartBeat != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Rain start armed at beat ${_pendingRainStartBeat!.toStringAsFixed(3)} (tap again to set end)',
+                      style: const TextStyle(color: Colors.amber),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _pendingRainStartBeat = null;
+                        _pendingRainLaneX = null;
+                      });
+                    },
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -1326,6 +1393,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
         notes: notes,
         selectedIds: _controller.selectedNoteIds,
         mode: _controller.editorMode,
+        timeDivision: _controller.timeDivision,
         viewBeat: _viewBeat,
         visibleBeats: _visibleBeats,
         playheadBeat: _controller.playheadBeat,
@@ -1335,6 +1403,9 @@ class _MobileEditorPageState extends State<MobileEditorPage>
         onPlaceNormal: _handleCanvasPlaceNormal,
         onPlaceRain: _handleCanvasPlaceRain,
         onMoveSelected: _handleMoveSelected,
+        onMoveSelectedDelta: _handleMoveSelectedDelta,
+        onSelectRegion: _handleCanvasSelectRegion,
+        onClearSelection: _controller.clearSelection,
         onLongPressContext: (beat, x, globalPosition) => unawaited(
           _showCanvasContextMenu(
             beat: beat,

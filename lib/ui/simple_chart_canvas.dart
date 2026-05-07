@@ -11,6 +11,7 @@ class SimpleChartCanvas extends StatefulWidget {
     required this.notes,
     required this.selectedIds,
     required this.mode,
+    required this.timeDivision,
     required this.viewBeat,
     required this.visibleBeats,
     required this.playheadBeat,
@@ -20,12 +21,16 @@ class SimpleChartCanvas extends StatefulWidget {
     required this.onPlaceNormal,
     required this.onPlaceRain,
     required this.onMoveSelected,
+    required this.onMoveSelectedDelta,
+    required this.onSelectRegion,
+    this.onClearSelection,
     this.onLongPressContext,
   });
 
   final List<CoreNoteSnapshot> notes;
   final Set<String> selectedIds;
   final EditorMode mode;
+  final int timeDivision;
   final double viewBeat;
   final double visibleBeats;
   final double playheadBeat;
@@ -35,6 +40,15 @@ class SimpleChartCanvas extends StatefulWidget {
   final void Function(double beat, int x) onPlaceNormal;
   final void Function(double beat, int x) onPlaceRain;
   final void Function(double beat, int x) onMoveSelected;
+  final void Function(double beatDelta, int xDelta) onMoveSelectedDelta;
+  final void Function({
+    required double startBeat,
+    required double endBeat,
+    required int startX,
+    required int endX,
+  })
+  onSelectRegion;
+  final VoidCallback? onClearSelection;
   final void Function(double beat, int x, Offset globalPosition)?
   onLongPressContext;
 
@@ -47,6 +61,11 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
   static const double _maxVisibleBeats = 64.0;
   String? _draggingNoteId;
   double _scaleStartVisibleBeats = 16.0;
+  bool _selectingRect = false;
+  Offset? _selectStart;
+  Offset? _selectEnd;
+  double _dragLastBeat = 0;
+  int _dragLastX = 256;
 
   @override
   Widget build(BuildContext context) {
@@ -57,14 +76,18 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
       onScaleStart: (details) => _handleScaleStart(details.localFocalPoint),
       onScaleUpdate: (details) =>
           _handleScaleUpdate(details.localFocalPoint, details),
-      onScaleEnd: (_) => _draggingNoteId = null,
+      onScaleEnd: (_) => _handleScaleEnd(),
       child: CustomPaint(
         painter: _CanvasPainter(
           notes: widget.notes,
           selectedIds: widget.selectedIds,
+          timeDivision: widget.timeDivision,
           viewBeat: widget.viewBeat,
           playheadBeat: widget.playheadBeat,
           visibleBeats: widget.visibleBeats,
+          selectStart: _selectStart,
+          selectEnd: _selectEnd,
+          selectingRect: _selectingRect,
         ),
         child: const SizedBox.expand(),
       ),
@@ -84,6 +107,8 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
       widget.onPlaceRain(beat, x);
     } else if (widget.mode == EditorMode.placeNormal) {
       widget.onPlaceNormal(beat, x);
+    } else if (widget.mode == EditorMode.select) {
+      widget.onClearSelection?.call();
     }
   }
 
@@ -95,11 +120,21 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
 
   void _handleScaleStart(Offset position) {
     _scaleStartVisibleBeats = widget.visibleBeats;
+    _selectingRect = false;
+    _selectStart = null;
+    _selectEnd = null;
     final hit = _hitTest(position);
     if (hit != null && widget.selectedIds.contains(hit.id)) {
       _draggingNoteId = hit.id;
+      _dragLastBeat = _positionToBeat(position.dy, context.size?.height ?? 1);
+      _dragLastX = _positionToLaneX(position.dx, context.size?.width ?? 1);
     } else {
       _draggingNoteId = null;
+      if (widget.mode == EditorMode.select && hit == null) {
+        _selectingRect = true;
+        _selectStart = position;
+        _selectEnd = position;
+      }
     }
   }
 
@@ -118,15 +153,55 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
       return;
     }
 
+    if (_selectingRect) {
+      setState(() {
+        _selectEnd = position;
+      });
+      return;
+    }
+
     if (_draggingNoteId != null) {
       final beat = _positionToBeat(position.dy, context.size?.height ?? 1);
       final x = _positionToLaneX(position.dx, context.size?.width ?? 1);
-      widget.onMoveSelected(beat, x);
+      if (widget.selectedIds.length == 1) {
+        widget.onMoveSelected(beat, x);
+      } else {
+        final beatDelta = beat - _dragLastBeat;
+        final xDelta = x - _dragLastX;
+        if (beatDelta.abs() > 0.0001 || xDelta != 0) {
+          widget.onMoveSelectedDelta(beatDelta, xDelta);
+          _dragLastBeat = beat;
+          _dragLastX = x;
+        }
+      }
       return;
     }
 
     final next = max(0.0, widget.viewBeat + details.focalPointDelta.dy * 0.03);
     widget.onViewBeatChanged(next);
+  }
+
+  void _handleScaleEnd() {
+    if (_selectingRect && _selectStart != null && _selectEnd != null) {
+      final start = _selectStart!;
+      final end = _selectEnd!;
+      final startBeat = _positionToBeat(start.dy, context.size?.height ?? 1);
+      final endBeat = _positionToBeat(end.dy, context.size?.height ?? 1);
+      final startX = _positionToLaneX(start.dx, context.size?.width ?? 1);
+      final endX = _positionToLaneX(end.dx, context.size?.width ?? 1);
+      widget.onSelectRegion(
+        startBeat: startBeat,
+        endBeat: endBeat,
+        startX: startX,
+        endX: endX,
+      );
+    }
+    setState(() {
+      _draggingNoteId = null;
+      _selectingRect = false;
+      _selectStart = null;
+      _selectEnd = null;
+    });
   }
 
   CoreNoteSnapshot? _hitTest(Offset position) {
@@ -180,32 +255,60 @@ class _CanvasPainter extends CustomPainter {
   _CanvasPainter({
     required this.notes,
     required this.selectedIds,
+    required this.timeDivision,
     required this.viewBeat,
     required this.playheadBeat,
     required this.visibleBeats,
+    required this.selectStart,
+    required this.selectEnd,
+    required this.selectingRect,
   });
 
   final List<CoreNoteSnapshot> notes;
   final Set<String> selectedIds;
+  final int timeDivision;
   final double viewBeat;
   final double playheadBeat;
   final double visibleBeats;
+  final Offset? selectStart;
+  final Offset? selectEnd;
+  final bool selectingRect;
 
   @override
   void paint(Canvas canvas, Size size) {
     final bg = Paint()..color = const Color(0xFF151A23);
     canvas.drawRect(Offset.zero & size, bg);
 
-    final grid = Paint()
+    final normalizedDivision = timeDivision.clamp(1, 96);
+    final horizontalDivisions = max(
+      8,
+      (visibleBeats * normalizedDivision).round().clamp(8, 256),
+    );
+    for (var i = 0; i <= horizontalDivisions; i++) {
+      final y = size.height * i / horizontalDivisions;
+      final isMajor = i % normalizedDivision == 0;
+      final grid = Paint()
+        ..color = isMajor ? const Color(0xFF3A475B) : const Color(0xFF2A3444)
+        ..strokeWidth = isMajor ? 1.2 : 1;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
+    }
+
+    final referenceY = size.height * 0.8;
+    final referencePaint = Paint()
+      ..color = const Color(0xFF5B6D86)
+      ..strokeWidth = 1.5;
+    canvas.drawLine(
+      Offset(0, referenceY),
+      Offset(size.width, referenceY),
+      referencePaint,
+    );
+
+    final laneGrid = Paint()
       ..color = const Color(0xFF2A3444)
       ..strokeWidth = 1;
     for (var i = 0; i <= 8; i++) {
-      final y = size.height * i / 8;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
-    }
-    for (var i = 0; i <= 8; i++) {
       final x = size.width * i / 8;
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), grid);
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), laneGrid);
     }
 
     for (final note in notes) {
@@ -266,13 +369,33 @@ class _CanvasPainter extends CustomPainter {
       Offset(size.width, playheadY),
       playheadLine,
     );
+
+    if (selectingRect && selectStart != null && selectEnd != null) {
+      final rect = Rect.fromPoints(selectStart!, selectEnd!);
+      canvas.drawRect(
+        rect,
+        Paint()..color = const Color(0x334FC3F7),
+      );
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = const Color(0xFF4FC3F7)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2,
+      );
+    }
   }
 
   @override
   bool shouldRepaint(covariant _CanvasPainter oldDelegate) {
     return oldDelegate.notes != notes ||
         oldDelegate.selectedIds != selectedIds ||
+        oldDelegate.timeDivision != timeDivision ||
         oldDelegate.viewBeat != viewBeat ||
-        oldDelegate.playheadBeat != playheadBeat;
+        oldDelegate.visibleBeats != visibleBeats ||
+        oldDelegate.playheadBeat != playheadBeat ||
+        oldDelegate.selectStart != selectStart ||
+        oldDelegate.selectEnd != selectEnd ||
+        oldDelegate.selectingRect != selectingRect;
   }
 }
