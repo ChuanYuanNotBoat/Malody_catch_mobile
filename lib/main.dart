@@ -77,7 +77,23 @@ class MobileEditorPage extends StatefulWidget {
 
 class _MobileEditorPageState extends State<MobileEditorPage>
     with WidgetsBindingObserver {
-  static const double _visibleBeatWindow = 16.0;
+  static const double _desktopLikeMinWidth = 1200.0;
+  static const double _defaultVisibleBeats = 16.0;
+  static const double _minVisibleBeats = 4.0;
+  static const double _maxVisibleBeats = 64.0;
+  static const List<int> _snapDivisions = <int>[
+    1,
+    2,
+    3,
+    4,
+    6,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48,
+  ];
   static const List<double> _playbackRates = <double>[
     0.5,
     0.75,
@@ -99,8 +115,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   final TextEditingController _backgroundCtrl = TextEditingController();
   final TextEditingController _offsetCtrl = TextEditingController();
   final TextEditingController _speedCtrl = TextEditingController();
+  final TextEditingController _jumpBeatCtrl = TextEditingController(text: '0');
 
   double _viewBeat = 0;
+  double _visibleBeats = _defaultVisibleBeats;
 
   @override
   void initState() {
@@ -138,6 +156,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     _backgroundCtrl.dispose();
     _offsetCtrl.dispose();
     _speedCtrl.dispose();
+    _jumpBeatCtrl.dispose();
     super.dispose();
   }
 
@@ -179,9 +198,9 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     }
     final head = _controller.playheadBeat;
     final low = _viewBeat;
-    final high = _viewBeat + _visibleBeatWindow;
+    final high = _viewBeat + _visibleBeats;
     if (head < low || head > high) {
-      _viewBeat = (head - _visibleBeatWindow * 0.75).clamp(0.0, 1000000.0);
+      _viewBeat = (head - _visibleBeats * 0.75).clamp(0.0, 1000000.0);
     }
   }
 
@@ -410,9 +429,198 @@ class _MobileEditorPageState extends State<MobileEditorPage>
 
   void _seekFromDensity(double beat) {
     setState(() {
-      _viewBeat = (beat - _visibleBeatWindow * 0.75).clamp(0.0, 1000000.0);
+      _viewBeat = (beat - _visibleBeats * 0.75).clamp(0.0, 1000000.0);
     });
     unawaited(_controller.seekToBeat(beat));
+  }
+
+  void _setVisibleBeats(double beats) {
+    final clamped = beats.clamp(_minVisibleBeats, _maxVisibleBeats).toDouble();
+    if ((clamped - _visibleBeats).abs() < 0.001) {
+      return;
+    }
+    setState(() {
+      _visibleBeats = clamped;
+    });
+  }
+
+  Future<void> _showCanvasContextMenu({
+    required double beat,
+    required int x,
+    required Offset globalPosition,
+  }) async {
+    if (!_controller.sessionOpen) {
+      return;
+    }
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        globalPosition.dx,
+        globalPosition.dy,
+        globalPosition.dx,
+        globalPosition.dy,
+      ),
+      items: [
+        const PopupMenuItem<String>(
+          value: 'place_normal',
+          child: Text('Place Normal Here'),
+        ),
+        const PopupMenuItem<String>(
+          value: 'place_rain',
+          child: Text('Place Rain Here'),
+        ),
+        PopupMenuItem<String>(
+          value: 'paste',
+          enabled: _controller.hasClipboardNotes,
+          child: const Text('Paste Here'),
+        ),
+        PopupMenuItem<String>(
+          value: 'copy_selected',
+          enabled: _controller.selectedCount > 0,
+          child: const Text('Copy Selected'),
+        ),
+        PopupMenuItem<String>(
+          value: 'delete_selected',
+          enabled: _controller.selectedCount > 0,
+          child: const Text('Delete Selected'),
+        ),
+      ],
+    );
+    switch (action) {
+      case 'place_normal':
+        _controller.addNormalNoteAtBeat(beat: beat, x: x);
+        return;
+      case 'place_rain':
+        _controller.addRainNoteAtBeat(beat: beat, x: x);
+        return;
+      case 'paste':
+        _controller.pasteClipboardAtBeat(beat);
+        return;
+      case 'copy_selected':
+        _controller.copySelectedNotes();
+        return;
+      case 'delete_selected':
+        _controller.deleteSelectedNotes();
+        return;
+      default:
+        return;
+    }
+  }
+
+  Future<void> _openRecentChart(String chartPath) async {
+    final normalized = chartPath.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    if (normalized.toLowerCase().endsWith('.mcz')) {
+      await _controller.importMczFile(
+        mczPath: normalized,
+        archive: _chartArchive,
+        workspace: _chartWorkspace,
+        chooseChart: _chooseMczChart,
+      );
+      return;
+    }
+    _controller.openChartFile(normalized);
+  }
+
+  Future<void> _seekBeatFromInput() async {
+    final parsed = double.tryParse(_jumpBeatCtrl.text.trim());
+    if (parsed == null || parsed.isNaN || parsed.isInfinite || parsed < 0) {
+      _controller.reportExternalError(
+        event: 'seek_input_invalid',
+        message: 'seek_input_invalid_beat',
+      );
+      return;
+    }
+    _seekFromDensity(parsed);
+  }
+
+  Future<void> _showGridSettingsDialog() async {
+    final timeDivisionCtrl = TextEditingController(
+      text: '${_controller.timeDivision}',
+    );
+    final gridDivisionCtrl = TextEditingController(
+      text: '${_controller.gridDivision}',
+    );
+    var gridSnap = _controller.gridSnapEnabled;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (statefulContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Grid Settings'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: timeDivisionCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Time Division (1-96)',
+                      ),
+                    ),
+                    TextField(
+                      controller: gridDivisionCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Grid Division (4-64)',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const Text('Grid Snap'),
+                        const Spacer(),
+                        Switch(
+                          value: gridSnap,
+                          onChanged: (value) =>
+                              setDialogState(() => gridSnap = value),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    final timeDivision =
+                        int.tryParse(timeDivisionCtrl.text.trim()) ??
+                        _controller.timeDivision;
+                    final gridDivision =
+                        int.tryParse(gridDivisionCtrl.text.trim()) ??
+                        _controller.gridDivision;
+                    _controller.setTimeDivision(timeDivision);
+                    _controller.setGridDivision(gridDivision);
+                    _controller.setGridSnapEnabled(gridSnap);
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    timeDivisionCtrl.dispose();
+    gridDivisionCtrl.dispose();
+  }
+
+  void _nudgeSelectionBeat(double beatDelta) {
+    _controller.nudgeSelectedNotes(beatDelta: beatDelta, xDelta: 0);
+  }
+
+  void _nudgeSelectionX(int xDelta) {
+    _controller.nudgeSelectedNotes(beatDelta: 0, xDelta: xDelta);
   }
 
   String _formatMs(int ms) {
@@ -573,6 +781,29 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     _controller.moveSelectedNoteTo(beat: beat, x: x);
   }
 
+  String _modeLabel(EditorMode mode) {
+    return switch (mode) {
+      EditorMode.placeNormal => 'Place Note',
+      EditorMode.placeRain => 'Place Rain',
+      EditorMode.delete => 'Delete',
+      EditorMode.select => 'Select',
+      EditorMode.move => 'Move',
+    };
+  }
+
+  String _noteTypeLabel(int type) {
+    return switch (type) {
+      0 => 'Normal',
+      1 => 'Sound',
+      3 => 'Rain',
+      _ => 'Type $type',
+    };
+  }
+
+  double _beatValue(CoreBeat beat) {
+    return beat.measure + beat.numerator / (beat.denominator == 0 ? 1 : beat.denominator);
+  }
+
   void _handleLifecyclePause() {
     unawaited(_controller.handleAppPaused());
     if (_controller.sessionOpen && _controller.dirty) {
@@ -674,41 +905,110 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   }
 
   Widget _buildEditPanel(bool canOperate) {
+    final primary = _controller.primarySelectedNote;
+    final beatStep = 1 / _controller.timeDivision;
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
         ListTile(
           dense: true,
           title: const Text('Selection'),
-          subtitle: Text('count=${_controller.selectedCount}'),
+          subtitle: Text(
+            'count=${_controller.selectedCount} | step=1/${_controller.timeDivision}',
+          ),
         ),
-        FilledButton.tonal(
-          onPressed: canOperate && _controller.selectedCount > 0
-              ? _deleteSelectedNotes
-              : null,
-          child: const Text('Delete Selected Notes'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton.tonal(
+              onPressed: canOperate ? _controller.selectAllNotes : null,
+              child: const Text('Select All'),
+            ),
+            OutlinedButton(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? _controller.clearSelection
+                  : null,
+              child: const Text('Clear'),
+            ),
+            FilledButton.tonal(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? _deleteSelectedNotes
+                  : null,
+              child: const Text('Delete'),
+            ),
+            FilledButton.tonal(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? _copySelectedNotes
+                  : null,
+              child: const Text('Copy'),
+            ),
+            FilledButton.tonal(
+              onPressed: canOperate && _controller.hasClipboardNotes
+                  ? _pasteNotesAtViewBeat
+                  : null,
+              child: const Text('Paste'),
+            ),
+          ],
         ),
+        const SizedBox(height: 10),
+        const Text('Nudge Selection'),
         const SizedBox(height: 8),
-        FilledButton.tonal(
-          onPressed: canOperate && _controller.selectedCount > 0
-              ? _copySelectedNotes
-              : null,
-          child: const Text('Copy Selected Notes'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionBeat(-beatStep)
+                  : null,
+              icon: const Icon(Icons.expand_less),
+              label: Text('-1/${_controller.timeDivision} Beat'),
+            ),
+            OutlinedButton.icon(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionBeat(beatStep)
+                  : null,
+              icon: const Icon(Icons.expand_more),
+              label: Text('+1/${_controller.timeDivision} Beat'),
+            ),
+            OutlinedButton.icon(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionX(-8)
+                  : null,
+              icon: const Icon(Icons.arrow_left),
+              label: const Text('X -8'),
+            ),
+            OutlinedButton.icon(
+              onPressed: canOperate && _controller.selectedCount > 0
+                  ? () => _nudgeSelectionX(8)
+                  : null,
+              icon: const Icon(Icons.arrow_right),
+              label: const Text('X +8'),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        FilledButton.tonal(
-          onPressed: canOperate && _controller.hasClipboardNotes
-              ? _pasteNotesAtViewBeat
-              : null,
-          child: const Text('Paste Notes At View Beat'),
-        ),
-        const SizedBox(height: 8),
-        OutlinedButton(
-          onPressed: canOperate && _controller.selectedCount > 0
-              ? _controller.clearSelection
-              : null,
-          child: const Text('Clear Selection'),
-        ),
+        if (primary != null) ...[
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Primary: ${primary.id}'),
+                  Text('Type: ${_noteTypeLabel(primary.type)}'),
+                  Text('Beat: ${_beatValue(primary.beat).toStringAsFixed(3)}'),
+                  Text('X: ${primary.x}'),
+                  if (primary.type == 3)
+                    Text(
+                      'End: ${_beatValue(primary.endBeat).toStringAsFixed(3)}',
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -754,6 +1054,353 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     );
   }
 
+  Widget _buildTopControls({
+    required bool startupReady,
+    required bool canOperate,
+    required bool canPlayback,
+    required bool isPlaying,
+    required String rateLabel,
+    required String positionLabel,
+    required String durationLabel,
+    required String beatLabel,
+    required List<CoreNoteSnapshot> notes,
+    required List<CoreBpmSnapshot> bpms,
+  }) {
+    const modeOrder = <EditorMode>[
+      EditorMode.placeNormal,
+      EditorMode.placeRain,
+      EditorMode.delete,
+      EditorMode.select,
+    ];
+
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton(
+                  onPressed: _controller.runStartupSelfCheck,
+                  child: const Text('Startup Check'),
+                ),
+                FilledButton(
+                  onPressed: startupReady ? _controller.openSession : null,
+                  child: const Text('Open Session'),
+                ),
+                FilledButton(
+                  onPressed: startupReady ? _openChart : null,
+                  child: const Text('Open .mc'),
+                ),
+                FilledButton(
+                  onPressed: canOperate ? _saveChart : null,
+                  child: const Text('Save .mc'),
+                ),
+                FilledButton(
+                  onPressed: canOperate ? _exportMcz : null,
+                  child: const Text('Export .mcz'),
+                ),
+                FilledButton(
+                  onPressed: canPlayback ? _togglePlayPause : null,
+                  child: Text(isPlaying ? 'Pause' : 'Play'),
+                ),
+                FilledButton(
+                  onPressed: canPlayback ? _stopPlayback : null,
+                  child: const Text('Stop'),
+                ),
+                PopupMenuButton<double>(
+                  enabled: canPlayback,
+                  tooltip: 'Playback Rate',
+                  onSelected: (value) => unawaited(_setPlaybackRate(value)),
+                  itemBuilder: (context) => _playbackRates
+                      .map(
+                        (value) => PopupMenuItem<double>(
+                          value: value,
+                          child: Text('${value.toStringAsFixed(2)}x'),
+                        ),
+                      )
+                      .toList(),
+                  child: Chip(label: Text('Rate $rateLabel')),
+                ),
+                Chip(label: Text('Time $positionLabel / $durationLabel')),
+                Chip(label: Text('Beat $beatLabel')),
+                OutlinedButton(
+                  onPressed: canOperate
+                      ? () => _setVisibleBeats(_visibleBeats * 1.2)
+                      : null,
+                  child: const Text('Zoom Out'),
+                ),
+                OutlinedButton(
+                  onPressed: canOperate
+                      ? () => _setVisibleBeats(_visibleBeats / 1.2)
+                      : null,
+                  child: const Text('Zoom In'),
+                ),
+                Chip(label: Text('View ${_visibleBeats.toStringAsFixed(1)}')),
+                FilledButton(
+                  onPressed: canOperate && _controller.canUndo
+                      ? _controller.undo
+                      : null,
+                  child: const Text('Undo'),
+                ),
+                FilledButton(
+                  onPressed: canOperate && _controller.canRedo
+                      ? _controller.redo
+                      : null,
+                  child: const Text('Redo'),
+                ),
+                FilledButton(
+                  onPressed: canOperate ? _controller.closeSession : null,
+                  child: const Text('Close Session'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                PopupMenuButton<int>(
+                  enabled: canOperate,
+                  onSelected: _controller.setTimeDivision,
+                  itemBuilder: (context) => _snapDivisions
+                      .map(
+                        (division) => PopupMenuItem<int>(
+                          value: division,
+                          child: Text('1/$division'),
+                        ),
+                      )
+                      .toList(),
+                  child: Chip(
+                    label: Text('Time Division 1/${_controller.timeDivision}'),
+                  ),
+                ),
+                FilterChip(
+                  label: const Text('Grid Snap'),
+                  selected: _controller.gridSnapEnabled,
+                  onSelected: canOperate ? _controller.setGridSnapEnabled : null,
+                ),
+                PopupMenuButton<int>(
+                  enabled: canOperate,
+                  onSelected: _controller.setGridDivision,
+                  itemBuilder: (context) => List<int>.generate(16, (i) => i + 4)
+                      .map(
+                        (division) => PopupMenuItem<int>(
+                          value: division,
+                          child: Text('Grid $division'),
+                        ),
+                      )
+                      .toList(),
+                  child: Chip(label: Text('Grid ${_controller.gridDivision}')),
+                ),
+                OutlinedButton(
+                  onPressed: canOperate
+                      ? () => unawaited(_showGridSettingsDialog())
+                      : null,
+                  child: const Text('Grid Settings'),
+                ),
+                SizedBox(
+                  width: 120,
+                  child: TextField(
+                    controller: _jumpBeatCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Seek Beat',
+                    ),
+                  ),
+                ),
+                OutlinedButton(
+                  onPressed: canPlayback
+                      ? () => unawaited(_seekBeatFromInput())
+                      : null,
+                  child: const Text('Seek'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: modeOrder
+                  .map(
+                    (mode) => ChoiceChip(
+                      label: Text(_modeLabel(mode)),
+                      selected: _controller.editorMode == mode,
+                      onSelected: canOperate
+                          ? (_) => _controller.setEditorMode(mode)
+                          : null,
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  label: Text('Selected ${_controller.selectedCount}'),
+                  onPressed: null,
+                ),
+                FilledButton.tonal(
+                  onPressed: canOperate && _controller.selectedCount > 0
+                      ? _deleteSelectedNotes
+                      : null,
+                  child: const Text('Delete'),
+                ),
+                FilledButton.tonal(
+                  onPressed: canOperate && _controller.selectedCount > 0
+                      ? _copySelectedNotes
+                      : null,
+                  child: const Text('Copy'),
+                ),
+                FilledButton.tonal(
+                  onPressed: canOperate && _controller.hasClipboardNotes
+                      ? _pasteNotesAtViewBeat
+                      : null,
+                  child: const Text('Paste'),
+                ),
+                OutlinedButton(
+                  onPressed: canOperate && _controller.selectedCount > 0
+                      ? _controller.clearSelection
+                      : null,
+                  child: const Text('Clear'),
+                ),
+              ],
+            ),
+            if (_controller.recentFiles.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _controller.recentFiles
+                    .map(
+                      (path) => ActionChip(
+                        label: Text(path, overflow: TextOverflow.ellipsis),
+                        onPressed: () => unawaited(_openRecentChart(path)),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'file: ${_controller.currentFilePath ?? '<none>'}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text('notes: ${notes.length}'),
+                const SizedBox(width: 12),
+                Text('bpms: ${bpms.length}'),
+                const SizedBox(width: 12),
+                Text('dirty: ${_controller.dirty}'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEditorSurface({
+    required bool desktopLike,
+    required bool canOperate,
+    required List<CoreNoteSnapshot> notes,
+    required List<CoreBpmSnapshot> bpms,
+  }) {
+    final canvasCard = Card(
+      margin: const EdgeInsets.all(12),
+      clipBehavior: Clip.antiAlias,
+      child: SimpleChartCanvas(
+        notes: notes,
+        selectedIds: _controller.selectedNoteIds,
+        mode: _controller.editorMode,
+        viewBeat: _viewBeat,
+        visibleBeats: _visibleBeats,
+        playheadBeat: _controller.playheadBeat,
+        onViewBeatChanged: (value) => setState(() => _viewBeat = value),
+        onVisibleBeatsChanged: _setVisibleBeats,
+        onHitNote: _controller.handleNoteTap,
+        onPlaceNormal: _handleCanvasPlaceNormal,
+        onPlaceRain: _handleCanvasPlaceRain,
+        onMoveSelected: _handleMoveSelected,
+        onLongPressContext: (beat, x, globalPosition) => unawaited(
+          _showCanvasContextMenu(
+            beat: beat,
+            x: x,
+            globalPosition: globalPosition,
+          ),
+        ),
+      ),
+    );
+
+    final densityCard = Padding(
+      padding: const EdgeInsets.only(right: 12, top: 12, bottom: 12),
+      child: Card(
+        child: SimpleDensityBar(
+          notes: notes,
+          playheadBeat: _controller.playheadBeat,
+          viewBeat: _viewBeat,
+          visibleBeats: _visibleBeats,
+          onSeekBeat: _seekFromDensity,
+        ),
+      ),
+    );
+
+    if (desktopLike) {
+      return Row(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: canvasCard),
+                densityCard,
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 340,
+            child: Card(
+              margin: const EdgeInsets.fromLTRB(0, 12, 12, 12),
+              child: _buildInspectorPanel(canOperate, bpms),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: canvasCard),
+              densityCard,
+            ],
+          ),
+        ),
+        SizedBox(
+          height: 300,
+          child: Card(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: _buildInspectorPanel(canOperate, bpms),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final report = _controller.startupReport;
@@ -773,232 +1420,40 @@ class _MobileEditorPageState extends State<MobileEditorPage>
 
     return Scaffold(
       appBar: AppBar(title: const Text('Malody Catch Mobile Editor')),
-      body: Column(
-        children: [
-          SizedBox(
-            height: 192,
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        FilledButton(
-                          onPressed: _controller.runStartupSelfCheck,
-                          child: const Text('Startup Check'),
-                        ),
-                        FilledButton(
-                          onPressed: startupReady
-                              ? _controller.openSession
-                              : null,
-                          child: const Text('Open Session'),
-                        ),
-                        FilledButton(
-                          onPressed: startupReady ? _openChart : null,
-                          child: const Text('Open .mc'),
-                        ),
-                        FilledButton(
-                          onPressed: canOperate ? _saveChart : null,
-                          child: const Text('Save .mc'),
-                        ),
-                        FilledButton(
-                          onPressed: canOperate ? _exportMcz : null,
-                          child: const Text('Export .mcz'),
-                        ),
-                        FilledButton(
-                          onPressed: canPlayback ? _togglePlayPause : null,
-                          child: Text(isPlaying ? 'Pause' : 'Play'),
-                        ),
-                        FilledButton(
-                          onPressed: canPlayback ? _stopPlayback : null,
-                          child: const Text('Stop'),
-                        ),
-                        PopupMenuButton<double>(
-                          enabled: canPlayback,
-                          tooltip: 'Playback Rate',
-                          onSelected: (value) =>
-                              unawaited(_setPlaybackRate(value)),
-                          itemBuilder: (context) => _playbackRates
-                              .map(
-                                (value) => PopupMenuItem<double>(
-                                  value: value,
-                                  child: Text('${value.toStringAsFixed(2)}x'),
-                                ),
-                              )
-                              .toList(),
-                          child: Chip(label: Text('Rate $rateLabel')),
-                        ),
-                        Chip(
-                          label: Text('Time $positionLabel / $durationLabel'),
-                        ),
-                        Chip(label: Text('Beat $beatLabel')),
-                        FilledButton(
-                          onPressed: canOperate && _controller.canUndo
-                              ? _controller.undo
-                              : null,
-                          child: const Text('Undo'),
-                        ),
-                        FilledButton(
-                          onPressed: canOperate && _controller.canRedo
-                              ? _controller.redo
-                              : null,
-                          child: const Text('Redo'),
-                        ),
-                        FilledButton(
-                          onPressed: canOperate
-                              ? _controller.closeSession
-                              : null,
-                          child: const Text('Close Session'),
-                        ),
-                      ],
-                    ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final desktopLike = constraints.maxWidth >= _desktopLikeMinWidth;
+          final topPanelHeight = desktopLike ? 232.0 : 188.0;
+          return Column(
+            children: [
+              SizedBox(
+                height: topPanelHeight,
+                child: SingleChildScrollView(
+                  child: _buildTopControls(
+                    startupReady: startupReady,
+                    canOperate: canOperate,
+                    canPlayback: canPlayback,
+                    isPlaying: isPlaying,
+                    rateLabel: rateLabel,
+                    positionLabel: positionLabel,
+                    durationLabel: durationLabel,
+                    beatLabel: beatLabel,
+                    notes: notes,
+                    bpms: bpms,
                   ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'file: ${_controller.currentFilePath ?? '<none>'}',
-                          ),
-                        ),
-                        Text('notes: ${notes.length}'),
-                        const SizedBox(width: 12),
-                        Text('bpms: ${bpms.length}'),
-                        const SizedBox(width: 12),
-                        Text('dirty: ${_controller.dirty}'),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: EditorMode.values
-                          .map(
-                            (mode) => ChoiceChip(
-                              label: Text(mode.name),
-                              selected: _controller.editorMode == mode,
-                              onSelected: canOperate
-                                  ? (_) => _controller.setEditorMode(mode)
-                                  : null,
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        ActionChip(
-                          label: Text('Selected ${_controller.selectedCount}'),
-                          onPressed: null,
-                        ),
-                        FilledButton.tonal(
-                          onPressed: canOperate && _controller.selectedCount > 0
-                              ? _deleteSelectedNotes
-                              : null,
-                          child: const Text('Delete Selected'),
-                        ),
-                        FilledButton.tonal(
-                          onPressed: canOperate && _controller.selectedCount > 0
-                              ? _copySelectedNotes
-                              : null,
-                          child: const Text('Copy Selected'),
-                        ),
-                        FilledButton.tonal(
-                          onPressed: canOperate && _controller.hasClipboardNotes
-                              ? _pasteNotesAtViewBeat
-                              : null,
-                          child: const Text('Paste @ View'),
-                        ),
-                        OutlinedButton(
-                          onPressed: canOperate && _controller.selectedCount > 0
-                              ? _controller.clearSelection
-                              : null,
-                          child: const Text('Clear Selection'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (_controller.recentFiles.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: _controller.recentFiles
-                              .map(
-                                (path) => ActionChip(
-                                  label: Text(
-                                    path,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  onPressed: () =>
-                                      _controller.openChartFile(path),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
-                    ),
-                ],
+                ),
               ),
-            ),
-          ),
-          Expanded(
-            child: Row(
-              children: [
-                Expanded(
-                  child: Card(
-                    margin: const EdgeInsets.all(12),
-                    clipBehavior: Clip.antiAlias,
-                    child: SimpleChartCanvas(
-                      notes: notes,
-                      selectedIds: _controller.selectedNoteIds,
-                      mode: _controller.editorMode,
-                      viewBeat: _viewBeat,
-                      playheadBeat: _controller.playheadBeat,
-                      onViewBeatChanged: (value) =>
-                          setState(() => _viewBeat = value),
-                      onHitNote: _controller.handleNoteTap,
-                      onPlaceNormal: _handleCanvasPlaceNormal,
-                      onPlaceRain: _handleCanvasPlaceRain,
-                      onMoveSelected: _handleMoveSelected,
-                    ),
-                  ),
+              Expanded(
+                child: _buildEditorSurface(
+                  desktopLike: desktopLike,
+                  canOperate: canOperate,
+                  notes: notes,
+                  bpms: bpms,
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(
-                    right: 12,
-                    top: 12,
-                    bottom: 12,
-                  ),
-                  child: Card(
-                    child: SimpleDensityBar(
-                      notes: notes,
-                      playheadBeat: _controller.playheadBeat,
-                      onSeekBeat: _seekFromDensity,
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: 320,
-                  child: _buildInspectorPanel(canOperate, bpms),
-                ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }

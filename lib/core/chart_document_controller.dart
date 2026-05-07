@@ -123,6 +123,9 @@ class ChartDocumentController extends ChangeNotifier {
   String _lastErrorName = 'none';
   int _noteIdSeed = 0;
   EditorMode _editorMode = EditorMode.select;
+  int _timeDivision = 4;
+  bool _gridSnapEnabled = true;
+  int _gridDivision = 20;
   PlaybackStatus _playbackStatus = PlaybackStatus.idle;
   int _playheadMs = 0;
   double _playheadBeat = 0.0;
@@ -147,9 +150,33 @@ class ChartDocumentController extends ChangeNotifier {
   bool get canUndo => _session?.canUndo ?? false;
   bool get canRedo => _session?.canRedo ?? false;
   EditorMode get editorMode => _editorMode;
+  int get timeDivision => _timeDivision;
+  bool get gridSnapEnabled => _gridSnapEnabled;
+  int get gridDivision => _gridDivision;
   bool get hasDraft => _memoryDraft != null;
   int get selectedCount => _selectedNoteIds.length;
   bool get hasClipboardNotes => _noteClipboard.isNotEmpty;
+  UnmodifiableListView<CoreNoteSnapshot> get selectedNotes {
+    _refreshSnapshotsIfNeeded();
+    final selected = _cachedNotes
+        .where((note) => _selectedNoteIds.contains(note.id))
+        .toList()
+      ..sort((a, b) {
+        final beatDiff = _beatToDouble(a.beat).compareTo(_beatToDouble(b.beat));
+        if (beatDiff != 0) {
+          return beatDiff;
+        }
+        return a.x.compareTo(b.x);
+      });
+    return UnmodifiableListView<CoreNoteSnapshot>(selected);
+  }
+  CoreNoteSnapshot? get primarySelectedNote {
+    final selected = selectedNotes;
+    if (selected.length != 1) {
+      return null;
+    }
+    return selected.first;
+  }
   PlaybackStatus get playbackStatus => _playbackStatus;
   int get playheadMs => _playheadMs;
   double get playheadBeat => _playheadBeat;
@@ -244,6 +271,44 @@ class ChartDocumentController extends ChangeNotifier {
     _editorMode = mode;
     _lastError = '';
     _lastEventLog = 'mode_set:${mode.name}';
+    notifyListeners();
+  }
+
+  void setTimeDivision(int division) {
+    final normalized = division.clamp(1, 96);
+    if (_timeDivision == normalized) {
+      return;
+    }
+    _timeDivision = normalized;
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = 'time_division_set:$_timeDivision';
+    notifyListeners();
+  }
+
+  void setGridSnapEnabled(bool enabled) {
+    if (_gridSnapEnabled == enabled) {
+      return;
+    }
+    _gridSnapEnabled = enabled;
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = 'grid_snap_set:$_gridSnapEnabled';
+    notifyListeners();
+  }
+
+  void setGridDivision(int division) {
+    final normalized = division.clamp(4, 64);
+    if (_gridDivision == normalized) {
+      return;
+    }
+    _gridDivision = normalized;
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = 'grid_division_set:$_gridDivision';
     notifyListeners();
   }
 
@@ -918,12 +983,14 @@ class ChartDocumentController extends ChangeNotifier {
   }
 
   void addNormalNoteAtBeat({required double beat, required int x}) {
-    final parsed = _doubleToBeat(beat);
+    final snappedBeat = _snapBeatForEdit(beat);
+    final snappedX = _snapLaneXForEdit(x);
+    final parsed = _doubleToBeat(snappedBeat);
     addNormalNote(
       measure: parsed.measure,
       numerator: parsed.numerator,
       denominator: parsed.denominator,
-      x: x,
+      x: snappedX,
     );
   }
 
@@ -940,9 +1007,11 @@ class ChartDocumentController extends ChangeNotifier {
   }
 
   void addRainNoteAtBeat({required double beat, required int x}) {
-    final start = _doubleToBeat(beat);
-    final end = _doubleToBeat(beat + 1.0);
-    addRainNote(beat: start, endBeat: end, x: x);
+    final snappedBeat = _snapBeatForEdit(beat);
+    final snappedX = _snapLaneXForEdit(x);
+    final start = _doubleToBeat(snappedBeat);
+    final end = _doubleToBeat(_snapBeatForEdit(snappedBeat + 1.0));
+    addRainNote(beat: start, endBeat: end, x: snappedX);
   }
 
   void moveSelectedRainNote({
@@ -998,14 +1067,19 @@ class ChartDocumentController extends ChangeNotifier {
       return;
     }
 
-    final nextBeat = _doubleToBeat(beat);
+    final snappedBeat = _snapBeatForEdit(beat);
+    final nextBeat = _doubleToBeat(snappedBeat);
     if (source.type == _noteTypeRain) {
       final span = max(
         0.0,
         _beatToDouble(source.endBeat) - _beatToDouble(source.beat),
       );
-      final nextEnd = _doubleToBeat(beat + max(span, 1.0));
-      moveSelectedRainNote(beat: nextBeat, endBeat: nextEnd, x: x);
+      final nextEnd = _doubleToBeat(_snapBeatForEdit(snappedBeat + max(span, 1.0)));
+      moveSelectedRainNote(
+        beat: nextBeat,
+        endBeat: nextEnd,
+        x: _snapLaneXForEdit(x),
+      );
       return;
     }
 
@@ -1014,7 +1088,7 @@ class ChartDocumentController extends ChangeNotifier {
       type: source.type,
       beat: nextBeat,
       endBeat: source.endBeat,
-      x: x,
+      x: _snapLaneXForEdit(x),
       sound: source.sound,
       volume: source.volume,
       offsetMs: source.offsetMs,
@@ -1194,6 +1268,22 @@ class ChartDocumentController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void selectAllNotes() {
+    _refreshSnapshotsIfNeeded();
+    if (_cachedNotes.isEmpty) {
+      _setFailure('select_all_failed', 'no_notes');
+      return;
+    }
+    _selectedNoteIds
+      ..clear()
+      ..addAll(_cachedNotes.map((note) => note.id));
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = 'select_all_ok:${_selectedNoteIds.length}';
+    notifyListeners();
+  }
+
   bool deleteSelectedNotes() {
     _refreshSnapshotsIfNeeded();
     if (_selectedNoteIds.isEmpty) {
@@ -1270,25 +1360,29 @@ class ChartDocumentController extends ChangeNotifier {
     final minBeat = sourceNotes
         .map((note) => _beatToDouble(note.beat))
         .reduce(min);
-    final beatDelta = anchorBeat - minBeat;
+    final snappedAnchor = _snapBeatForEdit(anchorBeat);
+    final beatDelta = snappedAnchor - minBeat;
     final addOps = <CoreNoteBatchOp>[];
     final newIds = <String>{};
     for (final source in sourceNotes) {
       final shiftedBeat = _beatToDouble(source.beat) + beatDelta;
-      final nextBeat = _doubleToBeat(max(0.0, shiftedBeat));
+      final nextBeatValue = _snapBeatForEdit(max(0.0, shiftedBeat));
+      final nextBeat = _doubleToBeat(nextBeatValue);
       CoreBeat nextEndBeat;
       if (source.type == _noteTypeRain) {
         final span = max(
           0.0,
           _beatToDouble(source.endBeat) - _beatToDouble(source.beat),
         );
-        nextEndBeat = _doubleToBeat(max(0.0, shiftedBeat + span));
+        nextEndBeat = _doubleToBeat(
+          _snapBeatForEdit(max(0.0, nextBeatValue + span)),
+        );
       } else {
         nextEndBeat = nextBeat;
       }
 
       final nextId = _nextGeneratedIdForType(source.type);
-      final nextX = source.type == 1 ? source.x : source.x.clamp(0, 512);
+      final nextX = source.type == 1 ? source.x : _snapLaneXForEdit(source.x);
       final pasted = CoreNoteSnapshot(
         id: nextId,
         type: source.type,
@@ -1314,6 +1408,78 @@ class ChartDocumentController extends ChangeNotifier {
       ..clear()
       ..addAll(newIds);
     _markChanged('paste_selected_ok:${addOps.length}');
+    return true;
+  }
+
+  bool nudgeSelectedNotes({required double beatDelta, required int xDelta}) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('nudge_selected_failed', 'session_not_open');
+      return false;
+    }
+    if (_selectedNoteIds.isEmpty) {
+      _setFailure('nudge_selected_failed', 'selection_empty');
+      return false;
+    }
+
+    _refreshSnapshotsIfNeeded();
+    final selected = _cachedNotes
+        .where((note) => _selectedNoteIds.contains(note.id))
+        .toList();
+    if (selected.isEmpty) {
+      _setFailure('nudge_selected_failed', 'selection_not_found');
+      return false;
+    }
+    if (beatDelta.abs() < 0.00001 && xDelta == 0) {
+      _lastError = '';
+      _lastErrorCode = 0;
+      _lastErrorName = 'none';
+      _lastEventLog = 'nudge_selected_noop';
+      notifyListeners();
+      return true;
+    }
+
+    final moveOps = <CoreNoteBatchOp>[];
+    for (final note in selected) {
+      final nextBeatValue = _snapBeatForEdit(
+        max(0.0, _beatToDouble(note.beat) + beatDelta),
+      );
+      final nextBeat = _doubleToBeat(nextBeatValue);
+      CoreBeat nextEndBeat = note.endBeat;
+      if (note.type == _noteTypeRain) {
+        final span = max(
+          0.0,
+          _beatToDouble(note.endBeat) - _beatToDouble(note.beat),
+        );
+        nextEndBeat = _doubleToBeat(nextBeatValue + span);
+      }
+
+      final nextX = note.type == 1
+          ? note.x
+          : _snapLaneXForEdit(note.x + xDelta);
+      moveOps.add(
+        CoreNoteBatchOp(
+          opType: CoreNoteBatchOpType.move,
+          note: CoreNoteSnapshot(
+            id: note.id,
+            type: note.type,
+            beat: nextBeat,
+            endBeat: nextEndBeat,
+            x: nextX,
+            sound: note.sound,
+            volume: note.volume,
+            offsetMs: note.offsetMs,
+          ),
+        ),
+      );
+    }
+
+    final ok = session.applyNoteBatch(moveOps);
+    if (!ok) {
+      _setFailureFromSession('nudge_selected_failed', session);
+      return false;
+    }
+    _markChanged('nudge_selected_ok:${moveOps.length}');
     return true;
   }
 
@@ -1911,6 +2077,27 @@ class ChartDocumentController extends ChangeNotifier {
         _memoryRecentFiles.length,
       );
     }
+  }
+
+  double _snapBeatForEdit(double beat) {
+    final nonNegative = max(0.0, beat);
+    if (_timeDivision <= 1) {
+      return nonNegative;
+    }
+    final division = _timeDivision.toDouble();
+    return (nonNegative * division).round() / division;
+  }
+
+  int _snapLaneXForEdit(int laneX) {
+    var clamped = laneX.clamp(0, 512).toInt();
+    if (!_gridSnapEnabled) {
+      return clamped;
+    }
+    final normalizedDivision = _gridDivision.clamp(1, 512);
+    final step = 512.0 / normalizedDivision;
+    final snapped = (clamped / step).round() * step;
+    clamped = snapped.round().clamp(0, 512);
+    return clamped;
   }
 
   String _nextGeneratedIdForType(int type) {

@@ -12,48 +12,59 @@ class SimpleChartCanvas extends StatefulWidget {
     required this.selectedIds,
     required this.mode,
     required this.viewBeat,
+    required this.visibleBeats,
     required this.playheadBeat,
     required this.onViewBeatChanged,
+    required this.onVisibleBeatsChanged,
     required this.onHitNote,
     required this.onPlaceNormal,
     required this.onPlaceRain,
     required this.onMoveSelected,
+    this.onLongPressContext,
   });
 
   final List<CoreNoteSnapshot> notes;
   final Set<String> selectedIds;
   final EditorMode mode;
   final double viewBeat;
+  final double visibleBeats;
   final double playheadBeat;
   final ValueChanged<double> onViewBeatChanged;
+  final ValueChanged<double> onVisibleBeatsChanged;
   final ValueChanged<String> onHitNote;
   final void Function(double beat, int x) onPlaceNormal;
   final void Function(double beat, int x) onPlaceRain;
   final void Function(double beat, int x) onMoveSelected;
+  final void Function(double beat, int x, Offset globalPosition)?
+  onLongPressContext;
 
   @override
   State<SimpleChartCanvas> createState() => _SimpleChartCanvasState();
 }
 
 class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
-  static const double _visibleBeats = 16.0;
+  static const double _minVisibleBeats = 4.0;
+  static const double _maxVisibleBeats = 64.0;
   String? _draggingNoteId;
+  double _scaleStartVisibleBeats = 16.0;
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTapDown: (details) => _handleTap(details.localPosition),
-      onPanStart: (details) => _handlePanStart(details.localPosition),
-      onPanUpdate: (details) =>
-          _handlePanUpdate(details.localPosition, details.delta),
-      onPanEnd: (_) => _draggingNoteId = null,
+      onLongPressStart: (details) =>
+          _handleLongPress(details.localPosition, details.globalPosition),
+      onScaleStart: (details) => _handleScaleStart(details.localFocalPoint),
+      onScaleUpdate: (details) =>
+          _handleScaleUpdate(details.localFocalPoint, details),
+      onScaleEnd: (_) => _draggingNoteId = null,
       child: CustomPaint(
         painter: _CanvasPainter(
           notes: widget.notes,
           selectedIds: widget.selectedIds,
           viewBeat: widget.viewBeat,
           playheadBeat: widget.playheadBeat,
-          visibleBeats: _visibleBeats,
+          visibleBeats: widget.visibleBeats,
         ),
         child: const SizedBox.expand(),
       ),
@@ -76,7 +87,14 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
     }
   }
 
-  void _handlePanStart(Offset position) {
+  void _handleLongPress(Offset position, Offset globalPosition) {
+    final beat = _positionToBeat(position.dy, context.size?.height ?? 1);
+    final x = _positionToLaneX(position.dx, context.size?.width ?? 1);
+    widget.onLongPressContext?.call(beat, x, globalPosition);
+  }
+
+  void _handleScaleStart(Offset position) {
+    _scaleStartVisibleBeats = widget.visibleBeats;
     final hit = _hitTest(position);
     if (hit != null && widget.selectedIds.contains(hit.id)) {
       _draggingNoteId = hit.id;
@@ -85,7 +103,21 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
     }
   }
 
-  void _handlePanUpdate(Offset position, Offset delta) {
+  void _handleScaleUpdate(Offset position, ScaleUpdateDetails details) {
+    if (details.pointerCount >= 2) {
+      final nextVisible = (_scaleStartVisibleBeats / details.scale).clamp(
+        _minVisibleBeats,
+        _maxVisibleBeats,
+      );
+      widget.onVisibleBeatsChanged(nextVisible.toDouble());
+      final nextView = max(
+        0.0,
+        widget.viewBeat + details.focalPointDelta.dy * 0.03,
+      );
+      widget.onViewBeatChanged(nextView);
+      return;
+    }
+
     if (_draggingNoteId != null) {
       final beat = _positionToBeat(position.dy, context.size?.height ?? 1);
       final x = _positionToLaneX(position.dx, context.size?.width ?? 1);
@@ -93,7 +125,7 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
       return;
     }
 
-    final next = max(0.0, widget.viewBeat + delta.dy * 0.03);
+    final next = max(0.0, widget.viewBeat + details.focalPointDelta.dy * 0.03);
     widget.onViewBeatChanged(next);
   }
 
@@ -121,7 +153,10 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
   }
 
   double _beatToY(double beat, double height) {
-    final ratio = ((beat - widget.viewBeat) / _visibleBeats).clamp(0.0, 1.0);
+    final ratio = ((beat - widget.viewBeat) / widget.visibleBeats).clamp(
+      0.0,
+      1.0,
+    );
     return height - ratio * height;
   }
 
@@ -130,7 +165,7 @@ class _SimpleChartCanvasState extends State<SimpleChartCanvas> {
       return widget.viewBeat;
     }
     final ratio = (1.0 - (y / height)).clamp(0.0, 1.0);
-    return widget.viewBeat + ratio * _visibleBeats;
+    return widget.viewBeat + ratio * widget.visibleBeats;
   }
 
   int _positionToLaneX(double x, double width) {

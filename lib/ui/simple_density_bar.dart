@@ -9,11 +9,15 @@ class SimpleDensityBar extends StatelessWidget {
     super.key,
     required this.notes,
     required this.playheadBeat,
+    required this.viewBeat,
+    required this.visibleBeats,
     required this.onSeekBeat,
   });
 
   final List<CoreNoteSnapshot> notes;
   final double playheadBeat;
+  final double viewBeat;
+  final double visibleBeats;
   final ValueChanged<double> onSeekBeat;
 
   @override
@@ -25,7 +29,12 @@ class SimpleDensityBar extends StatelessWidget {
       onVerticalDragUpdate: (details) =>
           _seek(details.localPosition.dy, context.size?.height ?? 1),
       child: CustomPaint(
-        painter: _DensityPainter(notes: notes, playheadBeat: playheadBeat),
+        painter: _DensityPainter(
+          notes: notes,
+          playheadBeat: playheadBeat,
+          viewBeat: viewBeat,
+          visibleBeats: visibleBeats,
+        ),
         child: const SizedBox(width: 56),
       ),
     );
@@ -56,10 +65,17 @@ class SimpleDensityBar extends StatelessWidget {
 }
 
 class _DensityPainter extends CustomPainter {
-  _DensityPainter({required this.notes, required this.playheadBeat});
+  _DensityPainter({
+    required this.notes,
+    required this.playheadBeat,
+    required this.viewBeat,
+    required this.visibleBeats,
+  });
 
   final List<CoreNoteSnapshot> notes;
   final double playheadBeat;
+  final double viewBeat;
+  final double visibleBeats;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -90,6 +106,23 @@ class _DensityPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTWH(size.width - 4 - w, y0, w, h), paint);
     }
 
+    final viewStartRatio = (viewBeat / maxBeat).clamp(0.0, 1.0);
+    final viewEndRatio = ((viewBeat + visibleBeats) / maxBeat).clamp(0.0, 1.0);
+    final viewTop = size.height - viewEndRatio * size.height;
+    final viewBottom = size.height - viewStartRatio * size.height;
+    final viewRect = Rect.fromLTRB(0, viewTop, size.width, viewBottom);
+    canvas.drawRect(
+      viewRect,
+      Paint()..color = const Color(0x3351B5E8),
+    );
+    canvas.drawRect(
+      viewRect,
+      Paint()
+        ..color = const Color(0xFF51B5E8)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
+
     final lineY =
         size.height - (playheadBeat / maxBeat).clamp(0.0, 1.0) * size.height;
     final line = Paint()
@@ -101,6 +134,8 @@ class _DensityPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _DensityPainter oldDelegate) {
     return oldDelegate.notes != notes ||
-        oldDelegate.playheadBeat != playheadBeat;
+        oldDelegate.playheadBeat != playheadBeat ||
+        oldDelegate.viewBeat != viewBeat ||
+        oldDelegate.visibleBeats != visibleBeats;
   }
 }

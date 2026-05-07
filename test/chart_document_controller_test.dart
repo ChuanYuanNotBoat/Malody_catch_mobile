@@ -100,6 +100,53 @@ void main() {
     expect(controller.notes.any((n) => n.id == selectedId), isFalse);
   });
 
+  test('controller applies time division and grid snap on placement/move', () {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    controller.setTimeDivision(4);
+    controller.setGridDivision(16);
+    controller.setGridSnapEnabled(true);
+
+    controller.addNormalNoteAtBeat(beat: 1.13, x: 111);
+    final placed = controller.notes.single;
+    final placedBeat =
+        placed.beat.measure + placed.beat.numerator / placed.beat.denominator;
+    expect(placedBeat, closeTo(1.25, 0.001));
+    expect(placed.x, 96);
+
+    controller.selectSingle(placed.id);
+    controller.moveSelectedNoteTo(beat: 2.62, x: 145);
+    final moved = controller.notes.single;
+    final movedBeat =
+        moved.beat.measure + moved.beat.numerator / moved.beat.denominator;
+    expect(movedBeat, closeTo(2.5, 0.001));
+    expect(moved.x, 160);
+  });
+
+  test('controller supports select all and nudge selected notes', () {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    controller.addNormalNote(measure: 1, numerator: 0, denominator: 1, x: 120);
+    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 300);
+
+    controller.selectAllNotes();
+    expect(controller.selectedCount, 2);
+
+    final nudged = controller.nudgeSelectedNotes(beatDelta: 0.5, xDelta: -16);
+    expect(nudged, isTrue);
+    expect(controller.notes.length, 2);
+    final beats = controller.notes
+        .map((note) => note.beat.measure + note.beat.numerator / note.beat.denominator)
+        .toList()
+      ..sort();
+    expect(beats[0], closeTo(1.5, 0.001));
+    expect(beats[1], closeTo(2.5, 0.001));
+  });
+
   test('controller .mc save and reopen roundtrip', () {
     final controller = ChartDocumentController(
       sessionFactory: () => FakeCoreSession(),
