@@ -223,6 +223,8 @@ void main() {
     );
     await tester.drag(find.byType(ListView).last, const Offset(0, -400));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Debug'));
+    await tester.pumpAndSettle();
     expect(find.textContaining('error: audio_playback_'), findsOneWidget);
 
     root.deleteSync(recursive: true);

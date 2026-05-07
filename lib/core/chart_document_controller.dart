@@ -81,6 +81,12 @@ class _DraftState {
   final EditorMode mode;
 }
 
+class _ClipboardNote {
+  const _ClipboardNote(this.note);
+
+  final CoreNoteSnapshot note;
+}
+
 class ChartDocumentController extends ChangeNotifier {
   ChartDocumentController({
     CoreSessionFactory? sessionFactory,
@@ -110,6 +116,7 @@ class ChartDocumentController extends ChangeNotifier {
   final List<CoreBpmSnapshot> _cachedBpms = <CoreBpmSnapshot>[];
   CoreMetadataSnapshot _cachedMetadata = CoreMetadataSnapshot.empty();
   final Set<String> _selectedNoteIds = <String>{};
+  final List<_ClipboardNote> _noteClipboard = <_ClipboardNote>[];
   String _lastEventLog = '';
   String _lastError = '';
   int _lastErrorCode = 0;
@@ -141,6 +148,8 @@ class ChartDocumentController extends ChangeNotifier {
   bool get canRedo => _session?.canRedo ?? false;
   EditorMode get editorMode => _editorMode;
   bool get hasDraft => _memoryDraft != null;
+  int get selectedCount => _selectedNoteIds.length;
+  bool get hasClipboardNotes => _noteClipboard.isNotEmpty;
   PlaybackStatus get playbackStatus => _playbackStatus;
   int get playheadMs => _playheadMs;
   double get playheadBeat => _playheadBeat;
@@ -1185,6 +1194,129 @@ class ChartDocumentController extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool deleteSelectedNotes() {
+    _refreshSnapshotsIfNeeded();
+    if (_selectedNoteIds.isEmpty) {
+      _setFailure('delete_selected_failed', 'selection_empty');
+      return false;
+    }
+    final idSet = Set<String>.from(_selectedNoteIds);
+    final removeOps = _cachedNotes
+        .where((note) => idSet.contains(note.id))
+        .map(
+          (note) =>
+              CoreNoteBatchOp(opType: CoreNoteBatchOpType.remove, note: note),
+        )
+        .toList();
+    if (removeOps.isEmpty) {
+      _setFailure('delete_selected_failed', 'selection_not_found');
+      return false;
+    }
+    final ok = applyNoteBatch(removeOps);
+    if (!ok) {
+      return false;
+    }
+    _lastEventLog = 'delete_selected_ok:${removeOps.length}';
+    notifyListeners();
+    return true;
+  }
+
+  bool copySelectedNotes() {
+    _refreshSnapshotsIfNeeded();
+    if (_selectedNoteIds.isEmpty) {
+      _setFailure('copy_selected_failed', 'selection_empty');
+      return false;
+    }
+    final selected =
+        _cachedNotes
+            .where((note) => _selectedNoteIds.contains(note.id))
+            .toList()
+          ..sort((a, b) {
+            final beatDiff = _beatToDouble(
+              a.beat,
+            ).compareTo(_beatToDouble(b.beat));
+            if (beatDiff != 0) {
+              return beatDiff;
+            }
+            return a.x.compareTo(b.x);
+          });
+    if (selected.isEmpty) {
+      _setFailure('copy_selected_failed', 'selection_not_found');
+      return false;
+    }
+    _noteClipboard
+      ..clear()
+      ..addAll(selected.map((note) => _ClipboardNote(note)));
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    _lastEventLog = 'copy_selected_ok:${selected.length}';
+    notifyListeners();
+    return true;
+  }
+
+  bool pasteClipboardAtBeat(double anchorBeat) {
+    final session = _session;
+    if (session == null) {
+      _setFailure('paste_selected_failed', 'session_not_open');
+      return false;
+    }
+    if (_noteClipboard.isEmpty) {
+      _setFailure('paste_selected_failed', 'clipboard_empty');
+      return false;
+    }
+
+    final sourceNotes = _noteClipboard.map((entry) => entry.note).toList();
+    final minBeat = sourceNotes
+        .map((note) => _beatToDouble(note.beat))
+        .reduce(min);
+    final beatDelta = anchorBeat - minBeat;
+    final addOps = <CoreNoteBatchOp>[];
+    final newIds = <String>{};
+    for (final source in sourceNotes) {
+      final shiftedBeat = _beatToDouble(source.beat) + beatDelta;
+      final nextBeat = _doubleToBeat(max(0.0, shiftedBeat));
+      CoreBeat nextEndBeat;
+      if (source.type == _noteTypeRain) {
+        final span = max(
+          0.0,
+          _beatToDouble(source.endBeat) - _beatToDouble(source.beat),
+        );
+        nextEndBeat = _doubleToBeat(max(0.0, shiftedBeat + span));
+      } else {
+        nextEndBeat = nextBeat;
+      }
+
+      final nextId = _nextGeneratedIdForType(source.type);
+      final nextX = source.type == 1 ? source.x : source.x.clamp(0, 512);
+      final pasted = CoreNoteSnapshot(
+        id: nextId,
+        type: source.type,
+        beat: nextBeat,
+        endBeat: nextEndBeat,
+        x: nextX,
+        sound: source.sound,
+        volume: source.volume,
+        offsetMs: source.offsetMs,
+      );
+      addOps.add(
+        CoreNoteBatchOp(opType: CoreNoteBatchOpType.add, note: pasted),
+      );
+      newIds.add(nextId);
+    }
+
+    final ok = session.applyNoteBatch(addOps);
+    if (!ok) {
+      _setFailureFromSession('paste_selected_failed', session);
+      return false;
+    }
+    _selectedNoteIds
+      ..clear()
+      ..addAll(newIds);
+    _markChanged('paste_selected_ok:${addOps.length}');
+    return true;
+  }
+
   void saveDraftToMemory() {
     _refreshSnapshotsIfNeeded();
     _memoryDraft = _DraftState(
@@ -1779,6 +1911,17 @@ class ChartDocumentController extends ChangeNotifier {
         _memoryRecentFiles.length,
       );
     }
+  }
+
+  String _nextGeneratedIdForType(int type) {
+    _noteIdSeed += 1;
+    if (type == _noteTypeRain) {
+      return 'mobile-rain-$_noteIdSeed';
+    }
+    if (type == 1) {
+      return 'mobile-sound-$_noteIdSeed';
+    }
+    return 'mobile-note-$_noteIdSeed';
   }
 
   CoreBeat _doubleToBeat(double beat) {

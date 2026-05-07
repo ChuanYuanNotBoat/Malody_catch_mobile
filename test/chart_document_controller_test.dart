@@ -72,6 +72,34 @@ void main() {
     expect(controller.notes.first.x, 300);
   });
 
+  test('controller supports selection delete/copy/paste batch flow', () {
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    controller.addNormalNote(measure: 1, numerator: 0, denominator: 1, x: 100);
+    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 260);
+
+    final firstId = controller.notes.first.id;
+    controller.selectSingle(firstId);
+    final copied = controller.copySelectedNotes();
+    expect(copied, isTrue);
+    expect(controller.hasClipboardNotes, isTrue);
+
+    final pasted = controller.pasteClipboardAtBeat(6.0);
+    expect(pasted, isTrue);
+    expect(controller.notes.length, 3);
+    final pastedNote = controller.notes.last;
+    expect(pastedNote.beat.measure, 6);
+
+    controller.clearSelection();
+    final selectedId = controller.notes[1].id;
+    controller.selectSingle(selectedId);
+    final deleted = controller.deleteSelectedNotes();
+    expect(deleted, isTrue);
+    expect(controller.notes.any((n) => n.id == selectedId), isFalse);
+  });
+
   test('controller .mc save and reopen roundtrip', () {
     final controller = ChartDocumentController(
       sessionFactory: () => FakeCoreSession(),

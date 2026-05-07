@@ -95,6 +95,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   final TextEditingController _titleCtrl = TextEditingController();
   final TextEditingController _artistCtrl = TextEditingController();
   final TextEditingController _difficultyCtrl = TextEditingController();
+  final TextEditingController _audioCtrl = TextEditingController();
+  final TextEditingController _backgroundCtrl = TextEditingController();
+  final TextEditingController _offsetCtrl = TextEditingController();
+  final TextEditingController _speedCtrl = TextEditingController();
 
   double _viewBeat = 0;
 
@@ -130,6 +134,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     _titleCtrl.dispose();
     _artistCtrl.dispose();
     _difficultyCtrl.dispose();
+    _audioCtrl.dispose();
+    _backgroundCtrl.dispose();
+    _offsetCtrl.dispose();
+    _speedCtrl.dispose();
     super.dispose();
   }
 
@@ -146,6 +154,20 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     }
     if (_difficultyCtrl.text != meta.difficulty) {
       _difficultyCtrl.text = meta.difficulty;
+    }
+    if (_audioCtrl.text != meta.audioFile) {
+      _audioCtrl.text = meta.audioFile;
+    }
+    if (_backgroundCtrl.text != meta.backgroundFile) {
+      _backgroundCtrl.text = meta.backgroundFile;
+    }
+    final offsetText = '${meta.offsetMs}';
+    if (_offsetCtrl.text != offsetText) {
+      _offsetCtrl.text = offsetText;
+    }
+    final speedText = '${meta.speed}';
+    if (_speedCtrl.text != speedText) {
+      _speedCtrl.text = speedText;
     }
     _softFollowPlaybackHead();
     setState(() {});
@@ -405,22 +427,138 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     return '$mm:$ss.$hh';
   }
 
+  int _parseIntOrDefault(String raw, int fallback) {
+    final parsed = int.tryParse(raw.trim());
+    return parsed ?? fallback;
+  }
+
+  double _parseDoubleOrDefault(String raw, double fallback) {
+    final parsed = double.tryParse(raw.trim());
+    return parsed ?? fallback;
+  }
+
   void _applyMeta() {
+    final current = _controller.metadata;
     final next = _controller.metadata.copyWith(
       title: _titleCtrl.text.trim(),
       artist: _artistCtrl.text.trim(),
       difficulty: _difficultyCtrl.text.trim().isEmpty
           ? 'Normal'
           : _difficultyCtrl.text.trim(),
+      audioFile: _audioCtrl.text.trim(),
+      backgroundFile: _backgroundCtrl.text.trim(),
+      offsetMs: _parseIntOrDefault(_offsetCtrl.text, current.offsetMs),
+      speed: _parseIntOrDefault(_speedCtrl.text, current.speed),
     );
     _controller.updateMetadata(next);
   }
 
-  void _addBpm() {
-    _controller.addBpmEntry(
-      beat: const CoreBeat(measure: 0, numerator: 0, denominator: 1),
-      bpm: 120,
+  Future<void> _addBpm() async {
+    await _showBpmEditor();
+  }
+
+  Future<void> _editBpm(int index, CoreBpmSnapshot bpm) async {
+    await _showBpmEditor(index: index, existing: bpm);
+  }
+
+  Future<void> _showBpmEditor({int? index, CoreBpmSnapshot? existing}) async {
+    final measureCtrl = TextEditingController(
+      text: '${existing?.beat.measure ?? 0}',
     );
+    final numeratorCtrl = TextEditingController(
+      text: '${existing?.beat.numerator ?? 0}',
+    );
+    final denominatorCtrl = TextEditingController(
+      text: '${existing?.beat.denominator ?? 1}',
+    );
+    final bpmCtrl = TextEditingController(
+      text: existing?.bpm.toStringAsFixed(2) ?? '120.00',
+    );
+    final isEdit = index != null && existing != null;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(isEdit ? 'Edit BPM' : 'Add BPM'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: measureCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Measure'),
+                ),
+                TextField(
+                  controller: numeratorCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Numerator'),
+                ),
+                TextField(
+                  controller: denominatorCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Denominator'),
+                ),
+                TextField(
+                  controller: bpmCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(labelText: 'BPM'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final beat = CoreBeat(
+                  measure: _parseIntOrDefault(measureCtrl.text, 0),
+                  numerator: _parseIntOrDefault(numeratorCtrl.text, 0),
+                  denominator: _parseIntOrDefault(denominatorCtrl.text, 1),
+                );
+                final bpmValue = _parseDoubleOrDefault(bpmCtrl.text, 120.0);
+                if (isEdit) {
+                  _controller.updateBpmEntry(
+                    index: index,
+                    beat: beat,
+                    bpm: bpmValue,
+                  );
+                } else {
+                  _controller.addBpmEntry(beat: beat, bpm: bpmValue);
+                }
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Apply'),
+            ),
+          ],
+        );
+      },
+    );
+    measureCtrl.dispose();
+    numeratorCtrl.dispose();
+    denominatorCtrl.dispose();
+    bpmCtrl.dispose();
+  }
+
+  void _deleteSelectedNotes() {
+    _controller.deleteSelectedNotes();
+  }
+
+  void _copySelectedNotes() {
+    _controller.copySelectedNotes();
+  }
+
+  void _pasteNotesAtViewBeat() {
+    final anchorBeat = _controller.playheadBeat > 0
+        ? _controller.playheadBeat
+        : _viewBeat;
+    _controller.pasteClipboardAtBeat(anchorBeat);
   }
 
   void _handleCanvasPlaceNormal(double beat, int x) {
@@ -440,6 +578,180 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     if (_controller.sessionOpen && _controller.dirty) {
       _controller.saveDraftToMemory();
     }
+  }
+
+  Widget _buildMetaPanel(bool canOperate) {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        TextField(
+          controller: _titleCtrl,
+          decoration: const InputDecoration(labelText: 'Title'),
+        ),
+        TextField(
+          controller: _artistCtrl,
+          decoration: const InputDecoration(labelText: 'Artist'),
+        ),
+        TextField(
+          controller: _difficultyCtrl,
+          decoration: const InputDecoration(labelText: 'Difficulty'),
+        ),
+        TextField(
+          controller: _audioCtrl,
+          decoration: const InputDecoration(labelText: 'Audio File'),
+        ),
+        TextField(
+          controller: _backgroundCtrl,
+          decoration: const InputDecoration(labelText: 'Background File'),
+        ),
+        TextField(
+          controller: _offsetCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Offset (ms)'),
+        ),
+        TextField(
+          controller: _speedCtrl,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Speed'),
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          onPressed: canOperate ? _applyMeta : null,
+          child: const Text('Apply Meta'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBpmPanel(bool canOperate, List<CoreBpmSnapshot> bpms) {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Row(
+          children: [
+            const Text('BPM List'),
+            const Spacer(),
+            IconButton(
+              onPressed: canOperate ? () => unawaited(_addBpm()) : null,
+              icon: const Icon(Icons.add),
+            ),
+          ],
+        ),
+        ...bpms.asMap().entries.map((entry) {
+          final idx = entry.key;
+          final bpm = entry.value;
+          return Card(
+            child: ListTile(
+              dense: true,
+              title: Text(
+                '${bpm.beat.measure}:${bpm.beat.numerator}/${bpm.beat.denominator}',
+              ),
+              subtitle: Text('bpm=${bpm.bpm.toStringAsFixed(2)}'),
+              trailing: Wrap(
+                spacing: 0,
+                children: [
+                  IconButton(
+                    tooltip: 'Edit BPM',
+                    onPressed: canOperate
+                        ? () => unawaited(_editBpm(idx, bpm))
+                        : null,
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                  IconButton(
+                    tooltip: 'Delete BPM',
+                    onPressed: canOperate
+                        ? () => _controller.removeBpmEntry(idx)
+                        : null,
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildEditPanel(bool canOperate) {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        ListTile(
+          dense: true,
+          title: const Text('Selection'),
+          subtitle: Text('count=${_controller.selectedCount}'),
+        ),
+        FilledButton.tonal(
+          onPressed: canOperate && _controller.selectedCount > 0
+              ? _deleteSelectedNotes
+              : null,
+          child: const Text('Delete Selected Notes'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.tonal(
+          onPressed: canOperate && _controller.selectedCount > 0
+              ? _copySelectedNotes
+              : null,
+          child: const Text('Copy Selected Notes'),
+        ),
+        const SizedBox(height: 8),
+        FilledButton.tonal(
+          onPressed: canOperate && _controller.hasClipboardNotes
+              ? _pasteNotesAtViewBeat
+              : null,
+          child: const Text('Paste Notes At View Beat'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton(
+          onPressed: canOperate && _controller.selectedCount > 0
+              ? _controller.clearSelection
+              : null,
+          child: const Text('Clear Selection'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDebugPanel() {
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        Text('log: ${_controller.lastEventLog}'),
+        Text('error_code: ${_controller.lastErrorCode}'),
+        Text('error_name: ${_controller.lastErrorName}'),
+        if (_controller.lastError.isNotEmpty)
+          Text('error: ${_controller.lastError}'),
+      ],
+    );
+  }
+
+  Widget _buildInspectorPanel(bool canOperate, List<CoreBpmSnapshot> bpms) {
+    return DefaultTabController(
+      length: 4,
+      child: Column(
+        children: [
+          const TabBar(
+            tabs: [
+              Tab(text: 'Meta'),
+              Tab(text: 'BPM'),
+              Tab(text: 'Edit'),
+              Tab(text: 'Debug'),
+            ],
+          ),
+          Expanded(
+            child: TabBarView(
+              children: [
+                _buildMetaPanel(canOperate),
+                _buildBpmPanel(canOperate, bpms),
+                _buildEditPanel(canOperate),
+                _buildDebugPanel(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -579,6 +891,43 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                           .toList(),
                     ),
                   ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ActionChip(
+                          label: Text('Selected ${_controller.selectedCount}'),
+                          onPressed: null,
+                        ),
+                        FilledButton.tonal(
+                          onPressed: canOperate && _controller.selectedCount > 0
+                              ? _deleteSelectedNotes
+                              : null,
+                          child: const Text('Delete Selected'),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: canOperate && _controller.selectedCount > 0
+                              ? _copySelectedNotes
+                              : null,
+                          child: const Text('Copy Selected'),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: canOperate && _controller.hasClipboardNotes
+                              ? _pasteNotesAtViewBeat
+                              : null,
+                          child: const Text('Paste @ View'),
+                        ),
+                        OutlinedButton(
+                          onPressed: canOperate && _controller.selectedCount > 0
+                              ? _controller.clearSelection
+                              : null,
+                          child: const Text('Clear Selection'),
+                        ),
+                      ],
+                    ),
+                  ),
                   if (_controller.recentFiles.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -644,68 +993,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
                 ),
                 SizedBox(
                   width: 320,
-                  child: ListView(
-                    padding: const EdgeInsets.only(
-                      top: 12,
-                      right: 12,
-                      bottom: 12,
-                    ),
-                    children: [
-                      TextField(
-                        controller: _titleCtrl,
-                        decoration: const InputDecoration(labelText: 'Title'),
-                      ),
-                      TextField(
-                        controller: _artistCtrl,
-                        decoration: const InputDecoration(labelText: 'Artist'),
-                      ),
-                      TextField(
-                        controller: _difficultyCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Difficulty',
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      FilledButton(
-                        onPressed: canOperate ? _applyMeta : null,
-                        child: const Text('Apply Meta'),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          const Text('BPM List'),
-                          const Spacer(),
-                          IconButton(
-                            onPressed: canOperate ? _addBpm : null,
-                            icon: const Icon(Icons.add),
-                          ),
-                        ],
-                      ),
-                      ...bpms.asMap().entries.map((entry) {
-                        final idx = entry.key;
-                        final bpm = entry.value;
-                        return ListTile(
-                          dense: true,
-                          title: Text(
-                            '${bpm.beat.measure}:${bpm.beat.numerator}/${bpm.beat.denominator}',
-                          ),
-                          subtitle: Text('bpm=${bpm.bpm.toStringAsFixed(2)}'),
-                          trailing: IconButton(
-                            onPressed: canOperate
-                                ? () => _controller.removeBpmEntry(idx)
-                                : null,
-                            icon: const Icon(Icons.delete_outline),
-                          ),
-                        );
-                      }),
-                      const SizedBox(height: 8),
-                      Text('log: ${_controller.lastEventLog}'),
-                      Text('error_code: ${_controller.lastErrorCode}'),
-                      Text('error_name: ${_controller.lastErrorName}'),
-                      if (_controller.lastError.isNotEmpty)
-                        Text('error: ${_controller.lastError}'),
-                    ],
-                  ),
+                  child: _buildInspectorPanel(canOperate, bpms),
                 ),
               ],
             ),
