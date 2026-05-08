@@ -137,6 +137,7 @@ class ChartDocumentController extends ChangeNotifier {
   StreamSubscription<Duration?>? _audioDurationSub;
   StreamSubscription<ChartAudioPlaybackState>? _audioStateSub;
   String? _preparedAudioPath;
+  bool _resumeOnAppResume = false;
 
   CoreStartupReport? get startupReport => _startupReport;
   bool get sessionOpen => _session != null;
@@ -855,6 +856,7 @@ class ChartDocumentController extends ChangeNotifier {
         PlaybackStatus.paused,
         event: '${_audioEventPrefix}pause',
       );
+      _resumeOnAppResume = false;
       return true;
     } catch (e) {
       _setPlaybackFailure('pause_failed:$e');
@@ -931,6 +933,7 @@ class ChartDocumentController extends ChangeNotifier {
         PlaybackStatus.paused,
         event: '${_audioEventPrefix}stop',
       );
+      _resumeOnAppResume = false;
       return true;
     } catch (e) {
       _setPlaybackFailure('stop_failed:$e');
@@ -940,9 +943,23 @@ class ChartDocumentController extends ChangeNotifier {
 
   Future<void> handleAppPaused() async {
     if (_audio == null || _playbackStatus != PlaybackStatus.playing) {
+      _resumeOnAppResume = false;
       return;
     }
+    _resumeOnAppResume = true;
     await pause();
+    _resumeOnAppResume = true;
+  }
+
+  Future<void> handleAppResumed() async {
+    if (!_resumeOnAppResume) {
+      return;
+    }
+    _resumeOnAppResume = false;
+    if (_audio == null || _preparedAudioPath == null) {
+      return;
+    }
+    await play();
   }
 
   void handleNoteTap(String id) {
@@ -1716,6 +1733,7 @@ class ChartDocumentController extends ChangeNotifier {
     _playheadBeat = 0.0;
     _durationMs = 0;
     _preparedAudioPath = null;
+    _resumeOnAppResume = false;
     if (!keepRate) {
       _playbackRate = 1.0;
     }
@@ -1742,6 +1760,7 @@ class ChartDocumentController extends ChangeNotifier {
     }
     final audio = _audio;
     _audio = null;
+    _resumeOnAppResume = false;
     if (audio != null) {
       unawaited(audio.dispose());
     }

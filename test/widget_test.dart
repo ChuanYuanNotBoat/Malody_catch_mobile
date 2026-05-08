@@ -6,6 +6,7 @@ import 'package:malody_catch_mobile/core/chart_document_controller.dart';
 import 'package:malody_catch_mobile/core/mc_chart_io.dart';
 import 'package:malody_catch_mobile/core/native_core.dart';
 import 'package:malody_catch_mobile/io/chart_file_picker.dart';
+import 'package:malody_catch_mobile/io/chart_audio.dart';
 import 'package:malody_catch_mobile/main.dart';
 import 'package:malody_catch_mobile/ui/simple_density_bar.dart';
 
@@ -472,6 +473,7 @@ void main() {
 
     final archive = FakeChartArchive();
     final workspace = FakeChartWorkspace(root.path);
+    final share = FakeChartShare();
 
     await tester.pumpWidget(
       MalodyCatchMobileApp(
@@ -479,6 +481,7 @@ void main() {
         filePicker: FakeChartFilePicker(saveDirectory: root.path),
         chartArchive: archive,
         chartWorkspace: workspace,
+        chartShare: share,
         runStartupSelfCheckOnInit: false,
         forceStartupReady: true,
       ),
@@ -511,6 +514,8 @@ void main() {
           false,
       isTrue,
     );
+    expect(share.shareCallCount, 1);
+    expect(share.lastFilePath, outputPath);
 
     root.deleteSync(recursive: true);
   });
@@ -545,6 +550,118 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(controller.lastError, contains('mcz_export_directory_not_selected'));
+
+    root.deleteSync(recursive: true);
+  });
+
+  testWidgets('Export .mcz reports share unavailable', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+    );
+    controller.openSession();
+    final root = Directory.systemTemp.createTempSync('mcz_export_share_fail');
+    final sourcePath = '${root.path}${Platform.pathSeparator}share_source.mc';
+    controller.saveChart(path: sourcePath);
+
+    final share = FakeChartShare(returnValue: false);
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        filePicker: FakeChartFilePicker(saveDirectory: root.path),
+        chartArchive: FakeChartArchive(),
+        chartWorkspace: FakeChartWorkspace(root.path),
+        chartShare: share,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final exportButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Export .mcz'),
+    );
+    await tester.runAsync(() async {
+      exportButton.onPressed!.call();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextFormField).last, 'share_fail_case');
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'OK'));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    await tester.pumpAndSettle();
+
+    expect(share.shareCallCount, 1);
+    expect(controller.lastEventLog, 'mcz_export_share_failed');
+    expect(controller.lastError, 'mcz_export_share_unavailable');
+
+    root.deleteSync(recursive: true);
+  });
+
+  testWidgets('App lifecycle pause auto-pauses playback and saves draft', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    late FakeChartAudio fakeAudio;
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () {
+        fakeAudio = FakeChartAudio(
+          initialDuration: const Duration(seconds: 90),
+        );
+        return fakeAudio;
+      },
+    );
+    controller.openSession();
+    controller.addNormalNote(measure: 1, numerator: 0, denominator: 1, x: 220);
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'LifecycleCase',
+        audioFile: 'audio/song.ogg',
+      ),
+    );
+
+    final root = Directory.systemTemp.createTempSync('mobile_lifecycle_pause');
+    final sourceChartPath = '${root.path}${Platform.pathSeparator}source.mc';
+    controller.saveChart(path: sourceChartPath);
+    controller.addNormalNote(measure: 2, numerator: 0, denominator: 1, x: 240);
+
+    final audioFile = File(
+      '${root.path}${Platform.pathSeparator}audio${Platform.pathSeparator}song.ogg',
+    );
+    audioFile.parent.createSync(recursive: true);
+    audioFile.writeAsStringSync('audio');
+
+    await tester.pumpWidget(
+      MalodyCatchMobileApp(
+        controller: controller,
+        runStartupSelfCheckOnInit: false,
+        forceStartupReady: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Play'));
+    await tester.pumpAndSettle();
+    expect(controller.playbackStatus, PlaybackStatus.playing);
+    expect(controller.hasDraft, isFalse);
+
+    final dynamic pageState = tester.state(find.byType(MobileEditorPage));
+    pageState.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await tester.pumpAndSettle();
+
+    expect(controller.playbackStatus, PlaybackStatus.paused);
+    expect(controller.hasDraft, isTrue);
+    expect(fakeAudio.currentState, ChartAudioPlaybackState.paused);
 
     root.deleteSync(recursive: true);
   });

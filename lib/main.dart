@@ -8,6 +8,7 @@ import 'core/chart_document_controller.dart';
 import 'core/native_core.dart';
 import 'io/chart_archive.dart';
 import 'io/chart_file_picker.dart';
+import 'io/chart_share.dart';
 import 'io/chart_workspace.dart';
 import 'ui/simple_chart_canvas.dart';
 import 'ui/simple_density_bar.dart';
@@ -23,6 +24,7 @@ class MalodyCatchMobileApp extends StatelessWidget {
     this.filePicker,
     this.chartArchive,
     this.chartWorkspace,
+    this.chartShare,
     this.runStartupSelfCheckOnInit = true,
     this.forceStartupReady,
   });
@@ -31,6 +33,7 @@ class MalodyCatchMobileApp extends StatelessWidget {
   final ChartFilePickerPort? filePicker;
   final ChartArchivePort? chartArchive;
   final ChartWorkspacePort? chartWorkspace;
+  final ChartSharePort? chartShare;
   final bool runStartupSelfCheckOnInit;
   final bool? forceStartupReady;
 
@@ -46,6 +49,7 @@ class MalodyCatchMobileApp extends StatelessWidget {
         filePicker: filePicker,
         chartArchive: chartArchive,
         chartWorkspace: chartWorkspace,
+        chartShare: chartShare,
         runStartupSelfCheckOnInit: runStartupSelfCheckOnInit,
         forceStartupReady: forceStartupReady,
       ),
@@ -60,6 +64,7 @@ class MobileEditorPage extends StatefulWidget {
     this.filePicker,
     this.chartArchive,
     this.chartWorkspace,
+    this.chartShare,
     this.runStartupSelfCheckOnInit = true,
     this.forceStartupReady,
   });
@@ -68,6 +73,7 @@ class MobileEditorPage extends StatefulWidget {
   final ChartFilePickerPort? filePicker;
   final ChartArchivePort? chartArchive;
   final ChartWorkspacePort? chartWorkspace;
+  final ChartSharePort? chartShare;
   final bool runStartupSelfCheckOnInit;
   final bool? forceStartupReady;
 
@@ -106,6 +112,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   late final ChartFilePickerPort _filePicker;
   late final ChartArchivePort _chartArchive;
   late final ChartWorkspacePort _chartWorkspace;
+  late final ChartSharePort _chartShare;
   late final bool _ownsController;
 
   final TextEditingController _titleCtrl = TextEditingController();
@@ -137,6 +144,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     _filePicker = widget.filePicker ?? const ChartFilePicker();
     _chartArchive = widget.chartArchive ?? const ChartArchive();
     _chartWorkspace = widget.chartWorkspace ?? const ChartWorkspace();
+    _chartShare = widget.chartShare ?? const ChartShare();
 
     _controller.addListener(_onControllerChanged);
     if (widget.runStartupSelfCheckOnInit) {
@@ -360,15 +368,39 @@ class _MobileEditorPageState extends State<MobileEditorPage>
           ? fileName.trim()
           : '${fileName.trim()}.mcz';
       final targetPath = '$outputDir${Platform.pathSeparator}$normalized';
-      await _controller.exportMczFile(
+      final exported = await _controller.exportMczFile(
         outputPath: targetPath,
         archive: _chartArchive,
         workspace: _chartWorkspace,
       );
+      if (exported) {
+        await _shareExportedMcz(targetPath);
+      }
     } catch (e) {
       _controller.reportExternalError(
         event: 'mcz_export_failed',
         message: 'mcz_export_picker_exception:$e',
+      );
+    }
+  }
+
+  Future<void> _shareExportedMcz(String targetPath) async {
+    try {
+      final shared = await _chartShare.shareFile(
+        filePath: targetPath,
+        subject: path.basename(targetPath),
+        text: path.basename(targetPath),
+      );
+      if (!shared) {
+        _controller.reportExternalError(
+          event: 'mcz_export_share_failed',
+          message: 'mcz_export_share_unavailable',
+        );
+      }
+    } catch (e) {
+      _controller.reportExternalError(
+        event: 'mcz_export_share_failed',
+        message: 'mcz_export_share_exception:$e',
       );
     }
   }
@@ -844,6 +876,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     if (_controller.sessionOpen && _controller.dirty) {
       _controller.saveDraftToMemory();
     }
+  }
+
+  void _handleLifecycleResume() {
+    unawaited(_controller.handleAppResumed());
   }
 
   Widget _buildMetaPanel(bool canOperate) {
@@ -1616,6 +1652,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
       _handleLifecyclePause();
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      _handleLifecycleResume();
     }
   }
 }

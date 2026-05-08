@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:malody_catch_mobile/io/chart_archive.dart';
+import 'package:malody_catch_mobile/io/chart_share.dart';
 import 'package:malody_catch_mobile/io/chart_workspace.dart';
 import 'package:path/path.dart' as path;
 
@@ -43,6 +44,36 @@ class FakeChartArchive implements ChartArchivePort {
     if (onCreate != null) {
       await onCreate!(outputPath, files);
     }
+  }
+}
+
+class FakeChartShare implements ChartSharePort {
+  FakeChartShare({
+    this.throwOnShare = false,
+    this.returnValue = true,
+  });
+
+  final bool throwOnShare;
+  final bool returnValue;
+  int shareCallCount = 0;
+  String? lastFilePath;
+  String? lastSubject;
+  String? lastText;
+
+  @override
+  Future<bool> shareFile({
+    required String filePath,
+    String? subject,
+    String? text,
+  }) async {
+    shareCallCount += 1;
+    lastFilePath = filePath;
+    lastSubject = subject;
+    lastText = text;
+    if (throwOnShare) {
+      throw StateError('share unavailable');
+    }
+    return returnValue;
   }
 }
 

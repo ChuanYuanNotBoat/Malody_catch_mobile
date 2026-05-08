@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:malody_catch_mobile/core/chart_document_controller.dart';
 import 'package:malody_catch_mobile/core/mc_chart_io.dart';
 import 'package:malody_catch_mobile/core/native_core.dart';
+import 'package:malody_catch_mobile/io/chart_audio.dart';
 import 'package:path/path.dart' as path;
 
 import 'support/fake_chart_audio.dart';
@@ -362,6 +363,85 @@ void main() {
     final prepared = await controller.prepareAudioFromCurrentChart();
     expect(prepared, isTrue);
     expect(fakeAudio.loadedPath, audioPath);
+
+    root.deleteSync(recursive: true);
+  });
+
+  test('controller auto-resumes only when paused by app lifecycle', () async {
+    late FakeChartAudio fakeAudio;
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () {
+        fakeAudio = FakeChartAudio();
+        return fakeAudio;
+      },
+    );
+
+    final root = Directory.systemTemp.createTempSync('mobile_audio_lifecycle');
+    final audioPath = path.join(root.path, 'audio', 'song.ogg');
+    final audioFile = File(audioPath);
+    audioFile.parent.createSync(recursive: true);
+    audioFile.writeAsStringSync('audio');
+
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(title: 'Lifecycle', audioFile: 'audio/song.ogg'),
+    );
+    final chartPath = path.join(root.path, 'lifecycle.mc');
+    controller.saveChart(path: chartPath);
+
+    final prepared = await controller.prepareAudioFromCurrentChart();
+    expect(prepared, isTrue);
+    final played = await controller.play();
+    expect(played, isTrue);
+    expect(controller.playbackStatus, PlaybackStatus.playing);
+
+    await controller.handleAppPaused();
+    expect(controller.playbackStatus, PlaybackStatus.paused);
+    expect(fakeAudio.currentState, ChartAudioPlaybackState.paused);
+
+    await controller.handleAppResumed();
+    expect(controller.playbackStatus, PlaybackStatus.playing);
+    expect(fakeAudio.currentState, ChartAudioPlaybackState.playing);
+
+    root.deleteSync(recursive: true);
+  });
+
+  test('controller does not auto-resume after manual pause', () async {
+    late FakeChartAudio fakeAudio;
+    final controller = ChartDocumentController(
+      sessionFactory: () => FakeCoreSession(),
+      audioFactory: () {
+        fakeAudio = FakeChartAudio();
+        return fakeAudio;
+      },
+    );
+
+    final root = Directory.systemTemp.createTempSync('mobile_audio_manual_pause');
+    final audioPath = path.join(root.path, 'audio', 'song.ogg');
+    final audioFile = File(audioPath);
+    audioFile.parent.createSync(recursive: true);
+    audioFile.writeAsStringSync('audio');
+
+    controller.openSession();
+    controller.updateMetadata(
+      controller.metadata.copyWith(
+        title: 'ManualPause',
+        audioFile: 'audio/song.ogg',
+      ),
+    );
+    final chartPath = path.join(root.path, 'manual_pause.mc');
+    controller.saveChart(path: chartPath);
+
+    expect(await controller.prepareAudioFromCurrentChart(), isTrue);
+    expect(await controller.play(), isTrue);
+    expect(await controller.pause(), isTrue);
+    expect(controller.playbackStatus, PlaybackStatus.paused);
+
+    await controller.handleAppPaused();
+    await controller.handleAppResumed();
+    expect(controller.playbackStatus, PlaybackStatus.paused);
+    expect(fakeAudio.currentState, ChartAudioPlaybackState.paused);
 
     root.deleteSync(recursive: true);
   });
