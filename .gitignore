@@ -52,6 +52,9 @@ SYNC_EXECUTION_CONTEXT_*.md
 
 # Android local build intermediates
 /android/build/
+/android/key.properties
+/android/keystores/
+/android/app/src/main/jniLibs/*/libmalody_catch_core_ffi.sync.txt
 
 # Local environment config
 .env
