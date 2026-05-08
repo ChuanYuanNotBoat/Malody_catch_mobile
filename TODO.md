@@ -1,84 +1,57 @@
-# Malody Catch Mobile TODO
+﻿# Malody Catch Mobile TODO（代码真相版 / 细化执行）
 
-更新日期：2026-04-29
+更新日期：2026-05-07
+适用仓库：`Malody_catch_mobile`
+协作约束：不修改桌面仓库，仅维护 mobile/core 两份分册。
 
-## 近期目标
+## 状态语义
 
-Android 首版先完成移动端低延迟编辑闭环：
+- `[x]` 完成
+- `[~]` 进行中
+- `[ ]` 待做
 
-- Flutter 负责 UI、触摸、画布、音频和文件入口。
-- `Malody_catch_core` 通过 `dart:ffi` 提供数据和编辑规则。
-- 首版不支持桌面插件系统。
+## M1 可发布最小闭环（进行中）
 
-## P0 - Native Core 接入
+| ID | 优先级 | 状态 | 任务 | 备注 |
+| --- | --- | --- | --- | --- |
+| MOB-M1-001 | P0 | [x] | 固化 build 入口与产物说明 | 已补 `tools/build_android_release.ps1` 与 `docs/release_build.md` |
+| MOB-M1-002 | P0 | [~] | release 签名与包体配置 | 已接入 `key.properties` 读取；真实证书/最终包名图标待定 |
+| MOB-M1-003 | P0 | [x] | 权限与文件访问策略 | 已补 `docs/permissions_file_access_strategy.md` |
+| MOB-M1-004 | P0 | [x] | `.mcz` 导出后系统分享 | 已接入 `share_plus`，失败回退错误提示 |
+| MOB-M1-005 | P0 | [x] | 真机回归清单 v1 | 已补 `docs/smoke_checklist.md` |
+| MOB-M1-006 | P0 | [x] | 异常路径用例集 | 已补 `docs/error_path_cases.md` + 自动化用例 |
+| MOB-M1-007 | P0 | [x] | 桌面术语 -> 移动入口映射 | 已补 `docs/desktop_to_mobile_mapping.md` |
+| MOB-M1-008 | P1 | [x] | 手势冲突优先级规则 | 已补 `docs/gesture_conflict_rules.md` |
+| MOB-M1-009 | P1 | [x] | 桌面操作回放验收脚本 | 已补 `docs/desktop_operation_replay_checklist.md` |
 
-- [x] 创建 Android-only Flutter 工程。
-- [x] 增加 `ffi` 依赖。
-- [x] 建立初始 Dart FFI 绑定：session、普通音符、snapshot、undo/redo。
-- [x] 从 sibling core 仓库构建 Android `arm64-v8a` `.so`。
-- [x] 将 `libmalody_catch_core_ffi.so` 放入 Android `jniLibs/arm64-v8a`。
-- [x] 增加 debug 启动自检：加载 native library、create/destroy session。
-- [x] 增加 FFI smoke test 页面或 debug action。
-- [x] 为 FFI 绑定增加异常边界：library missing、ABI mismatch、null session。
-- [x] 封装 `CoreSession` Dart class，隐藏裸指针生命周期。
+### M1 退出检查
 
-## P1 - 移动端数据状态层
+- [ ] 干净环境可生成并安装 release 包（待真实签名）。
+- [ ] `.mc/.mcz` 核心链路在至少 2 台 arm64 真机验证通过。
+- [x] 导出后分享流程可用，失败时有回退与提示。
 
-- [x] 建立 `ChartDocumentController`：持有 core session、当前文件路径、dirty 状态。
-- [x] 建立 note snapshot 缓存，按 core revision 刷新。
-- [x] 建立 selection state：单选、多选、清空、按 id 查询。
-- [x] 建立 editor mode：place normal、place rain、delete、select、move（当前先用于状态和交互分发）。
-- [x] 建立 undo/redo state，同步按钮可用状态。
-- [x] 建立错误展示通道：先用页面 log/error 区域承载，后续再接 SnackBar/dialog。
-- [x] 增加 autosave 草稿策略：当前先实现内存草稿与生命周期保存/恢复入口。
+## M2 体验与稳定性增强（部分完成）
 
-## P2 - Canvas 与触摸交互
+| ID | 优先级 | 状态 | 任务 | 备注 |
+| --- | --- | --- | --- | --- |
+| MOB-M2-003 | P1 | [x] | 前后台播放策略 | 已实现 lifecycle pause/resume 策略并补测试 |
 
-- [ ] 建立 `ChartCanvas` Flutter widget。
-- [ ] 建立坐标转换：screen x/y <-> lane x / beat。
-- [ ] 绘制基础网格、参考线、普通音符、rain 音符。
-- [ ] 实现单指点击放置普通音符。
-- [ ] 实现点击命中选择。
-- [ ] 实现拖动移动选中音符。
-- [ ] 实现双指缩放时间轴。
-- [ ] 实现单指纵向滚动谱面。
-- [ ] 实现长按上下文菜单：删除、复制、粘贴。
-- [ ] 增加帧率与耗时 debug overlay。
+## M3 跨仓协同（进行中）
 
-## P3 - 文件与音频
+| ID | 优先级 | 状态 | 任务 | 备注 |
+| --- | --- | --- | --- | --- |
+| MOB-M3-001 | P1 | [~] | ABI 升级流程 | 已有 cross-repo preflight，仍需团队发布纪律固化 |
+| MOB-M3-002 | P1 | [x] | `.so` 同步流程 | 已补同步元数据与校验脚本 |
 
-- [ ] 集成 Android 文件选择器，支持 `.mc` / `.mcz`。
-- [ ] 接 core load/save/export API。
-- [ ] 建立最近打开列表。
-- [ ] 集成音频播放库，支持播放、暂停、seek、速度。
-- [ ] 将音频进度映射到 canvas reference line。
-- [ ] 支持后台/前台切换时暂停和恢复策略。
-- [ ] 支持导出 `.mcz` 后系统分享。
+## 最小发布验收清单（执行面）
 
-## P4 - 移动端 UI
+- [ ] 真机启动通过 startup self-check。
+- [ ] `.mc/.mcz` 打开、编辑、保存、重开一致。
+- [ ] `.mcz` 导出包结构正确，桌面端可打开。
+- [ ] 音频播放、暂停、定位、变速与播放头联动正常。
+- [ ] 异常路径（库缺失/损坏文件/保存失败）可见提示且不崩溃。
 
-- [ ] 替换 Flutter 默认 counter 页面。
-- [ ] 建立横屏优先主界面：画布为第一视觉中心。
-- [ ] 建立顶部/底部工具栏：打开、保存、播放、撤销、重做、模式切换。
-- [ ] 建立可收起编辑面板：音符、BPM、Meta。
-- [ ] 建立移动端功能入口，不复刻桌面菜单树。
-- [ ] 建立暗色主题和触摸友好尺寸。
-- [ ] 隐藏插件入口，首版不展示不可用功能。
+## 责任边界
 
-## P5 - Android 打包与质量
-
-- [ ] 确认包名、应用名、图标、横屏策略。
-- [ ] 增加 Android 权限和文件访问策略。
-- [ ] 建立 debug/release 构建说明。
-- [ ] 真机测试目标：中端 Android 设备，优先 arm64。
-- [ ] 验证 30/60 FPS 交互稳定性。
-- [ ] 验证打开、编辑、保存、重开一致性。
-- [ ] 验证异常路径：native library 缺失、文件损坏、保存失败。
-
-## 验收清单
-
-- [ ] Android 真机可启动且加载 native core。
-- [ ] 能打开示例谱面并绘制音符。
-- [ ] 能放置、删除、移动、撤销、重做。
-- [ ] 能保存并由桌面端重新打开。
-- [ ] 操作中无明显 GUI 出界、卡顿、布局抽搐。
+- mobile 负责：文件入口、`.mcz` 工作流、音频编排、UI/交互、发布工程化。
+- core 负责：编辑规则、数据结构、撤销重做、FFI 稳定接口。

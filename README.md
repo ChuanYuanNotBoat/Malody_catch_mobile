@@ -32,6 +32,18 @@ chart-editing behavior is expected to come from the sibling
 - Android `arm64-v8a` native library is bundled at
   `android/app/src/main/jniLibs/arm64-v8a/libmalody_catch_core_ffi.so`.
 
+## Desktop Parity Scope (Feature / GUI / Interaction)
+
+- Reference desktop baseline:
+  `Malody_catch_editor@2f60ae6` (`desktop main`, `2026-05-05`)
+- Feature parity (current): edit loop, `.mc/.mcz` loop, playback loop.
+- GUI parity (current): desktop-like wide layout
+  (tools/canvas/inspector + density bar) and compact mobile layout.
+- Interaction parity (current): tap place/select, drag move, box select,
+  pinch zoom, long-press context menu, grid/time-division workflows.
+- Out of scope in this repo: desktop plugin system and desktop Qt panel stack.
+- Ongoing parity tracking lives in `TODO.md` (`MOB-M1-007/008/009`).
+
 ## Sync Native Library
 
 Use the local helper to rebuild and copy the sibling core `.so`:
@@ -39,6 +51,53 @@ Use the local helper to rebuild and copy the sibling core `.so`:
 ```powershell
 ./tools/sync_core_android_so.ps1
 ```
+
+## Build Release (Android)
+
+```powershell
+./tools/build_android_release.ps1 -Target both
+```
+
+Pre-release checks:
+
+```powershell
+./tools/pre_release_check.ps1
+```
+
+This includes sync metadata vs sibling core commit/ABI consistency checks.
+
+Cross-repo preflight (core + mobile):
+
+```powershell
+./tools/run_cross_repo_preflight.ps1
+```
+
+Cross-repo preflight with forced core `.so` sync:
+
+```powershell
+./tools/run_cross_repo_preflight.ps1 -SyncCore
+```
+
+- Release build guide:
+  `docs/release_build.md`
+- Preflight guide:
+  `docs/release_preflight.md`
+- Cross-repo preflight guide:
+  `docs/cross_repo_preflight.md`
+- Smoke checklist:
+  `docs/smoke_checklist.md`
+- Permissions/file access strategy:
+  `docs/permissions_file_access_strategy.md`
+- Desktop-to-mobile mapping:
+  `docs/desktop_to_mobile_mapping.md`
+- Gesture conflict rules:
+  `docs/gesture_conflict_rules.md`
+- Desktop operation replay checklist:
+  `docs/desktop_operation_replay_checklist.md`
+- Error-path case set:
+  `docs/error_path_cases.md`
+- Lifecycle playback policy:
+  `docs/lifecycle_playback_policy.md`
 
 ## Getting Started
 
