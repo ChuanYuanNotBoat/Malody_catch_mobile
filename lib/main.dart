@@ -128,6 +128,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   double _visibleBeats = _defaultVisibleBeats;
   double? _pendingRainStartBeat;
   int? _pendingRainLaneX;
+  double? _densitySeekStartBeat;
 
   @override
   void initState() {
@@ -461,11 +462,35 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     await _controller.setPlaybackRate(rate);
   }
 
-  void _seekFromDensity(double beat) {
+  void _previewSeekFromDensity(double beat) {
     setState(() {
       _viewBeat = (beat - _visibleBeats * 0.75).clamp(0.0, 1000000.0);
     });
-    unawaited(_controller.seekToBeat(beat));
+    _controller.previewSeekBeat(beat);
+  }
+
+  Future<void> _handleDensitySeekGestureStart() async {
+    _densitySeekStartBeat = _controller.playheadBeat;
+    if (_controller.playbackStatus == PlaybackStatus.playing) {
+      await _controller.pause();
+    }
+  }
+
+  Future<void> _commitSeekFromDensity(double beat) async {
+    _densitySeekStartBeat = null;
+    setState(() {
+      _viewBeat = (beat - _visibleBeats * 0.75).clamp(0.0, 1000000.0);
+    });
+    await _controller.seekToBeat(beat);
+  }
+
+  void _cancelSeekFromDensity() {
+    final startBeat = _densitySeekStartBeat;
+    _densitySeekStartBeat = null;
+    if (startBeat == null) {
+      return;
+    }
+    _controller.previewSeekBeat(startBeat);
   }
 
   void _setVisibleBeats(double beats) {
@@ -567,7 +592,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
       );
       return;
     }
-    _seekFromDensity(parsed);
+    await _commitSeekFromDensity(parsed);
   }
 
   Future<void> _showGridSettingsDialog() async {
@@ -819,7 +844,11 @@ class _MobileEditorPageState extends State<MobileEditorPage>
       return;
     }
     final laneX = _pendingRainLaneX ?? x;
-    _controller.addRainNoteBetweenBeats(startBeat: pendingStart, endBeat: beat, x: laneX);
+    _controller.addRainNoteBetweenBeats(
+      startBeat: pendingStart,
+      endBeat: beat,
+      x: laneX,
+    );
     setState(() {
       _pendingRainStartBeat = null;
       _pendingRainLaneX = null;
@@ -868,7 +897,8 @@ class _MobileEditorPageState extends State<MobileEditorPage>
   }
 
   double _beatValue(CoreBeat beat) {
-    return beat.measure + beat.numerator / (beat.denominator == 0 ? 1 : beat.denominator);
+    return beat.measure +
+        beat.numerator / (beat.denominator == 0 ? 1 : beat.denominator);
   }
 
   void _handleLifecyclePause() {
@@ -1095,10 +1125,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        const Text(
-          'Mode',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
+        const Text('Mode', style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         ...modeOrder.map(
           (mode) => RadioListTile<EditorMode>(
@@ -1144,10 +1171,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
             ),
           ),
         const Divider(height: 18),
-        const Text(
-          'Grid',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
+        const Text('Grid', style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         PopupMenuButton<int>(
           enabled: canOperate,
@@ -1190,14 +1214,13 @@ class _MobileEditorPageState extends State<MobileEditorPage>
         ),
         const SizedBox(height: 6),
         OutlinedButton(
-          onPressed: canOperate ? () => unawaited(_showGridSettingsDialog()) : null,
+          onPressed: canOperate
+              ? () => unawaited(_showGridSettingsDialog())
+              : null,
           child: const Text('Grid Settings'),
         ),
         const Divider(height: 18),
-        const Text(
-          'Selection',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
+        const Text('Selection', style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
         Text('Selected: ${_controller.selectedCount}'),
         const SizedBox(height: 8),
@@ -1307,11 +1330,7 @@ class _MobileEditorPageState extends State<MobileEditorPage>
       child: Column(
         children: [
           TabBar(tabs: tabs),
-          Expanded(
-            child: TabBarView(
-              children: views,
-            ),
-          ),
+          Expanded(child: TabBarView(children: views)),
         ],
       ),
     );
@@ -1527,7 +1546,10 @@ class _MobileEditorPageState extends State<MobileEditorPage>
           playheadBeat: _controller.playheadBeat,
           viewBeat: _viewBeat,
           visibleBeats: _visibleBeats,
-          onSeekBeat: _seekFromDensity,
+          onSeekGestureStart: () => unawaited(_handleDensitySeekGestureStart()),
+          onSeekPreviewBeat: _previewSeekFromDensity,
+          onSeekCommitBeat: (beat) => unawaited(_commitSeekFromDensity(beat)),
+          onSeekGestureCancel: _cancelSeekFromDensity,
         ),
       ),
     );

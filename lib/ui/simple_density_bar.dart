@@ -4,52 +4,32 @@ import 'package:flutter/material.dart';
 
 import '../core/native_core.dart';
 
-class SimpleDensityBar extends StatelessWidget {
+class SimpleDensityBar extends StatefulWidget {
   const SimpleDensityBar({
     super.key,
     required this.notes,
     required this.playheadBeat,
     required this.viewBeat,
     required this.visibleBeats,
-    required this.onSeekBeat,
+    required this.onSeekPreviewBeat,
+    required this.onSeekCommitBeat,
+    this.onSeekGestureStart,
+    this.onSeekGestureCancel,
   });
 
   final List<CoreNoteSnapshot> notes;
   final double playheadBeat;
   final double viewBeat;
   final double visibleBeats;
-  final ValueChanged<double> onSeekBeat;
+  final ValueChanged<double> onSeekPreviewBeat;
+  final ValueChanged<double> onSeekCommitBeat;
+  final VoidCallback? onSeekGestureStart;
+  final VoidCallback? onSeekGestureCancel;
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (details) =>
-          _seek(details.localPosition.dy, context.size?.height ?? 1),
-      onVerticalDragUpdate: (details) =>
-          _seek(details.localPosition.dy, context.size?.height ?? 1),
-      child: CustomPaint(
-        painter: _DensityPainter(
-          notes: notes,
-          playheadBeat: playheadBeat,
-          viewBeat: viewBeat,
-          visibleBeats: visibleBeats,
-        ),
-        child: const SizedBox(width: 56),
-      ),
-    );
-  }
+  State<SimpleDensityBar> createState() => _SimpleDensityBarState();
 
-  void _seek(double y, double height) {
-    if (height <= 1) {
-      return;
-    }
-    final maxBeat = _maxBeat(notes);
-    final ratio = (1.0 - (y / height)).clamp(0.0, 1.0);
-    onSeekBeat(ratio * maxBeat);
-  }
-
-  static double _maxBeat(List<CoreNoteSnapshot> notes) {
+  static double maxBeatOf(List<CoreNoteSnapshot> notes) {
     var maxBeat = 16.0;
     for (final note in notes) {
       final beat =
@@ -61,6 +41,96 @@ class SimpleDensityBar extends StatelessWidget {
       maxBeat = max(maxBeat, max(beat, endBeat) + 4);
     }
     return maxBeat;
+  }
+}
+
+class _SimpleDensityBarState extends State<SimpleDensityBar> {
+  double? _pendingBeat;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (details) => _handleTapDown(details, context),
+      onVerticalDragStart: (details) => _handleDragStart(details, context),
+      onVerticalDragUpdate: (details) => _handleDragUpdate(details, context),
+      onVerticalDragEnd: (_) => _handleDragEnd(),
+      onVerticalDragCancel: _handleDragCancel,
+      child: CustomPaint(
+        painter: _DensityPainter(
+          notes: widget.notes,
+          playheadBeat: widget.playheadBeat,
+          viewBeat: widget.viewBeat,
+          visibleBeats: widget.visibleBeats,
+        ),
+        child: const SizedBox(width: 56),
+      ),
+    );
+  }
+
+  double? _beatFromLocalY(double y, double height) {
+    if (height <= 1.0) {
+      return null;
+    }
+    final maxBeat = SimpleDensityBar.maxBeatOf(widget.notes);
+    if (maxBeat <= 0.0) {
+      return null;
+    }
+    final ratio = (1.0 - (y / height)).clamp(0.0, 1.0);
+    return ratio * maxBeat;
+  }
+
+  void _handleTapDown(TapDownDetails details, BuildContext context) {
+    final beat = _beatFromLocalY(
+      details.localPosition.dy,
+      context.size?.height ?? 1,
+    );
+    if (beat == null) {
+      return;
+    }
+    widget.onSeekGestureStart?.call();
+    widget.onSeekPreviewBeat(beat);
+    widget.onSeekCommitBeat(beat);
+  }
+
+  void _handleDragStart(DragStartDetails details, BuildContext context) {
+    final beat = _beatFromLocalY(
+      details.localPosition.dy,
+      context.size?.height ?? 1,
+    );
+    if (beat == null) {
+      _pendingBeat = null;
+      return;
+    }
+    _pendingBeat = beat;
+    widget.onSeekGestureStart?.call();
+    widget.onSeekPreviewBeat(beat);
+  }
+
+  void _handleDragUpdate(DragUpdateDetails details, BuildContext context) {
+    final beat = _beatFromLocalY(
+      details.localPosition.dy,
+      context.size?.height ?? 1,
+    );
+    if (beat == null) {
+      return;
+    }
+    _pendingBeat = beat;
+    widget.onSeekPreviewBeat(beat);
+  }
+
+  void _handleDragEnd() {
+    final beat = _pendingBeat;
+    _pendingBeat = null;
+    if (beat == null) {
+      return;
+    }
+    widget.onSeekCommitBeat(beat);
+  }
+
+  void _handleDragCancel() {
+    _pendingBeat = null;
+    widget.onSeekGestureCancel?.call();
   }
 }
 
@@ -84,7 +154,7 @@ class _DensityPainter extends CustomPainter {
 
     const bins = 72;
     final bucket = List<int>.filled(bins, 0);
-    final maxBeat = SimpleDensityBar._maxBeat(notes);
+    final maxBeat = SimpleDensityBar.maxBeatOf(notes);
     for (final note in notes) {
       final beat =
           note.beat.measure +
@@ -111,10 +181,7 @@ class _DensityPainter extends CustomPainter {
     final viewTop = size.height - viewEndRatio * size.height;
     final viewBottom = size.height - viewStartRatio * size.height;
     final viewRect = Rect.fromLTRB(0, viewTop, size.width, viewBottom);
-    canvas.drawRect(
-      viewRect,
-      Paint()..color = const Color(0x3351B5E8),
-    );
+    canvas.drawRect(viewRect, Paint()..color = const Color(0x3351B5E8));
     canvas.drawRect(
       viewRect,
       Paint()

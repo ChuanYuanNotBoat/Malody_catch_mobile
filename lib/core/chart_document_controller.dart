@@ -92,7 +92,9 @@ class ChartDocumentController extends ChangeNotifier {
     CoreSessionFactory? sessionFactory,
     ChartAudioFactory? audioFactory,
   }) : _sessionFactory = sessionFactory ?? CoreSession.open,
-       _audioFactory = audioFactory ?? (() => ChartAudio());
+       _audioFactory = audioFactory ?? (() => ChartAudio()) {
+    _playbackClock.start();
+  }
 
   static const int _noteTypeRain = 3;
   static const int _snapshotBatchSize = 128;
@@ -100,6 +102,13 @@ class ChartDocumentController extends ChangeNotifier {
   static const String _mczImportEventPrefix = 'mcz_import_';
   static const String _mczExportEventPrefix = 'mcz_export_';
   static const String _audioEventPrefix = 'audio_playback_';
+  static const int _playbackPulseIntervalMs = 16;
+  static const int _seekSameValueThresholdMs = 2;
+  static const double _anchorDeadZoneMs = 2.0;
+  static const double _anchorModerateWindowMs = 48.0;
+  static const double _anchorModerateGain = 0.04;
+  static const double _anchorLargeWindowMs = 220.0;
+  static const double _anchorLargeGain = 0.10;
 
   final CoreSessionFactory _sessionFactory;
   final ChartAudioFactory _audioFactory;
@@ -136,6 +145,12 @@ class ChartDocumentController extends ChangeNotifier {
   StreamSubscription<Duration>? _audioPositionSub;
   StreamSubscription<Duration?>? _audioDurationSub;
   StreamSubscription<ChartAudioPlaybackState>? _audioStateSub;
+  Timer? _playbackPulseTimer;
+  final Stopwatch _playbackClock = Stopwatch();
+  bool _playbackAnchorValid = false;
+  double _playbackAnchorMs = 0.0;
+  int _playbackAnchorWallMs = 0;
+  int _lastPlaybackPulseMs = 0;
   String? _preparedAudioPath;
   bool _resumeOnAppResume = false;
 
@@ -159,18 +174,22 @@ class ChartDocumentController extends ChangeNotifier {
   bool get hasClipboardNotes => _noteClipboard.isNotEmpty;
   UnmodifiableListView<CoreNoteSnapshot> get selectedNotes {
     _refreshSnapshotsIfNeeded();
-    final selected = _cachedNotes
-        .where((note) => _selectedNoteIds.contains(note.id))
-        .toList()
-      ..sort((a, b) {
-        final beatDiff = _beatToDouble(a.beat).compareTo(_beatToDouble(b.beat));
-        if (beatDiff != 0) {
-          return beatDiff;
-        }
-        return a.x.compareTo(b.x);
-      });
+    final selected =
+        _cachedNotes
+            .where((note) => _selectedNoteIds.contains(note.id))
+            .toList()
+          ..sort((a, b) {
+            final beatDiff = _beatToDouble(
+              a.beat,
+            ).compareTo(_beatToDouble(b.beat));
+            if (beatDiff != 0) {
+              return beatDiff;
+            }
+            return a.x.compareTo(b.x);
+          });
     return UnmodifiableListView<CoreNoteSnapshot>(selected);
   }
+
   CoreNoteSnapshot? get primarySelectedNote {
     final selected = selectedNotes;
     if (selected.length != 1) {
@@ -178,6 +197,7 @@ class ChartDocumentController extends ChangeNotifier {
     }
     return selected.first;
   }
+
   PlaybackStatus get playbackStatus => _playbackStatus;
   int get playheadMs => _playheadMs;
   double get playheadBeat => _playheadBeat;
@@ -834,6 +854,11 @@ class ChartDocumentController extends ChangeNotifier {
 
     try {
       await _audio!.play();
+      final currentMs = _clampPlaybackMs(
+        _audio!.currentPosition.inMilliseconds,
+      );
+      _playheadMs = currentMs;
+      _playheadBeat = _msToBeat(currentMs);
       _setPlaybackStatus(
         PlaybackStatus.playing,
         event: '${_audioEventPrefix}play',
@@ -871,14 +896,34 @@ class ChartDocumentController extends ChangeNotifier {
     }
 
     try {
-      final rawTargetMs = _beatToMs(beat);
-      final targetMs = _durationMs > 0
-          ? rawTargetMs.clamp(0, _durationMs)
-          : max(0, rawTargetMs);
+      final targetMs = _clampPlaybackMs(_beatToMs(beat));
+      final currentMs = _clampPlaybackMs(
+        _audio!.currentPosition.inMilliseconds,
+      );
+      if ((targetMs - currentMs).abs() <= _seekSameValueThresholdMs) {
+        _playheadMs = targetMs;
+        _playheadBeat = _msToBeat(targetMs);
+        _resetPlaybackAnchor(
+          targetMs.toDouble(),
+          _playbackClock.elapsedMilliseconds,
+        );
+        _lastPlaybackPulseMs = targetMs;
+        _lastError = '';
+        _lastErrorCode = 0;
+        _lastErrorName = 'none';
+        _lastEventLog = '${_audioEventPrefix}seek';
+        notifyListeners();
+        return true;
+      }
       final target = Duration(milliseconds: targetMs);
       await _audio!.seek(target);
       _playheadMs = targetMs;
       _playheadBeat = _msToBeat(targetMs);
+      _resetPlaybackAnchor(
+        targetMs.toDouble(),
+        _playbackClock.elapsedMilliseconds,
+      );
+      _lastPlaybackPulseMs = targetMs;
       _lastError = '';
       _lastErrorCode = 0;
       _lastErrorName = 'none';
@@ -907,6 +952,12 @@ class ChartDocumentController extends ChangeNotifier {
     }
     try {
       await _audio!.setRate(rate);
+      if (_playbackStatus == PlaybackStatus.playing) {
+        _resetPlaybackAnchor(
+          _playheadMs.toDouble(),
+          _playbackClock.elapsedMilliseconds,
+        );
+      }
       _lastError = '';
       _lastErrorCode = 0;
       _lastErrorName = 'none';
@@ -929,6 +980,8 @@ class ChartDocumentController extends ChangeNotifier {
       await _audio!.seek(Duration.zero);
       _playheadMs = 0;
       _playheadBeat = _msToBeat(0);
+      _lastPlaybackPulseMs = 0;
+      _playbackAnchorValid = false;
       _setPlaybackStatus(
         PlaybackStatus.paused,
         event: '${_audioEventPrefix}stop',
@@ -960,6 +1013,16 @@ class ChartDocumentController extends ChangeNotifier {
       return;
     }
     await play();
+  }
+
+  void previewSeekBeat(double beat) {
+    final targetMs = _clampPlaybackMs(_beatToMs(beat));
+    _playheadMs = targetMs;
+    _playheadBeat = _msToBeat(targetMs);
+    _lastError = '';
+    _lastErrorCode = 0;
+    _lastErrorName = 'none';
+    notifyListeners();
   }
 
   void handleNoteTap(String id) {
@@ -1110,7 +1173,9 @@ class ChartDocumentController extends ChangeNotifier {
         0.0,
         _beatToDouble(source.endBeat) - _beatToDouble(source.beat),
       );
-      final nextEnd = _doubleToBeat(_snapBeatForEdit(snappedBeat + max(span, 1.0)));
+      final nextEnd = _doubleToBeat(
+        _snapBeatForEdit(snappedBeat + max(span, 1.0)),
+      );
       moveSelectedRainNote(
         beat: nextBeat,
         endBeat: nextEnd,
@@ -1652,13 +1717,21 @@ class ChartDocumentController extends ChangeNotifier {
     final created = _audioFactory();
     _audio = created;
     _audioPositionSub = created.positionStream.listen((position) {
-      _playheadMs = position.inMilliseconds;
-      _playheadBeat = _msToBeat(_playheadMs);
-      if (_playbackStatus == PlaybackStatus.playing ||
-          _playbackStatus == PlaybackStatus.paused ||
-          _playbackStatus == PlaybackStatus.ready) {
+      final observedMs = _clampPlaybackMs(position.inMilliseconds);
+      if (_playbackStatus == PlaybackStatus.playing) {
+        _applyObservedPlaybackTime(
+          observedMs.toDouble(),
+          _playbackClock.elapsedMilliseconds,
+        );
+        _lastPlaybackPulseMs = observedMs;
+        _playheadMs = observedMs;
+        _playheadBeat = _msToBeat(_playheadMs);
         notifyListeners();
+        return;
       }
+      _playheadMs = observedMs;
+      _playheadBeat = _msToBeat(_playheadMs);
+      notifyListeners();
     });
     _audioDurationSub = created.durationStream.listen((duration) {
       _durationMs = duration?.inMilliseconds ?? 0;
@@ -1666,6 +1739,7 @@ class ChartDocumentController extends ChangeNotifier {
     });
     _audioStateSub = created.stateStream.listen(
       (state) {
+        final previous = _playbackStatus;
         switch (state) {
           case ChartAudioPlaybackState.idle:
             _playbackStatus = PlaybackStatus.idle;
@@ -1686,6 +1760,19 @@ class ChartDocumentController extends ChangeNotifier {
           case ChartAudioPlaybackState.error:
             _playbackStatus = PlaybackStatus.error;
             break;
+        }
+        if (_playbackStatus == PlaybackStatus.playing) {
+          _ensurePlaybackPulseActive();
+        } else {
+          _stopPlaybackPulse();
+        }
+        if (_playbackStatus != previous &&
+            _playbackStatus == PlaybackStatus.paused &&
+            _audio != null) {
+          _playheadMs = _clampPlaybackMs(
+            _audio!.currentPosition.inMilliseconds,
+          );
+          _playheadBeat = _msToBeat(_playheadMs);
         }
         notifyListeners();
       },
@@ -1711,6 +1798,11 @@ class ChartDocumentController extends ChangeNotifier {
 
   void _setPlaybackStatus(PlaybackStatus status, {required String event}) {
     _playbackStatus = status;
+    if (status == PlaybackStatus.playing) {
+      _ensurePlaybackPulseActive();
+    } else {
+      _stopPlaybackPulse();
+    }
     _lastError = '';
     _lastErrorCode = 0;
     _lastErrorName = 'none';
@@ -1719,6 +1811,7 @@ class ChartDocumentController extends ChangeNotifier {
   }
 
   void _setPlaybackFailure(String message) {
+    _stopPlaybackPulse();
     _playbackStatus = PlaybackStatus.error;
     _lastEventLog = '${_audioEventPrefix}failed';
     _lastError = '$_audioEventPrefix$message';
@@ -1728,9 +1821,11 @@ class ChartDocumentController extends ChangeNotifier {
   }
 
   void _resetPlaybackState({required bool notify, required bool keepRate}) {
+    _stopPlaybackPulse();
     _playbackStatus = PlaybackStatus.idle;
     _playheadMs = 0;
     _playheadBeat = 0.0;
+    _lastPlaybackPulseMs = 0;
     _durationMs = 0;
     _preparedAudioPath = null;
     _resumeOnAppResume = false;
@@ -1743,6 +1838,7 @@ class ChartDocumentController extends ChangeNotifier {
   }
 
   void _teardownAudio({required bool resetRate}) {
+    _stopPlaybackPulse();
     final positionSub = _audioPositionSub;
     _audioPositionSub = null;
     if (positionSub != null) {
@@ -1765,6 +1861,98 @@ class ChartDocumentController extends ChangeNotifier {
       unawaited(audio.dispose());
     }
     _resetPlaybackState(notify: false, keepRate: !resetRate);
+  }
+
+  int _clampPlaybackMs(int rawMs) {
+    if (_durationMs > 0) {
+      return rawMs.clamp(0, _durationMs);
+    }
+    return max(0, rawMs);
+  }
+
+  void _ensurePlaybackPulseActive() {
+    if (_playbackPulseTimer != null) {
+      return;
+    }
+    _lastPlaybackPulseMs = _clampPlaybackMs(_playheadMs);
+    _resetPlaybackAnchor(
+      _lastPlaybackPulseMs.toDouble(),
+      _playbackClock.elapsedMilliseconds,
+    );
+    _playbackPulseTimer = Timer.periodic(
+      const Duration(milliseconds: _playbackPulseIntervalMs),
+      (_) => _onPlaybackPulseTick(),
+    );
+  }
+
+  void _stopPlaybackPulse() {
+    final timer = _playbackPulseTimer;
+    _playbackPulseTimer = null;
+    timer?.cancel();
+    _playbackAnchorValid = false;
+  }
+
+  void _resetPlaybackAnchor(double timeMs, int nowMs) {
+    _playbackAnchorMs = max(0.0, timeMs);
+    _playbackAnchorWallMs = nowMs;
+    _playbackAnchorValid = true;
+  }
+
+  void _applyObservedPlaybackTime(double observedMs, int nowMs) {
+    final clampedObserved = _clampPlaybackMs(observedMs.round()).toDouble();
+    if (!_playbackAnchorValid) {
+      _resetPlaybackAnchor(clampedObserved, nowMs);
+      _lastPlaybackPulseMs = clampedObserved.round();
+      return;
+    }
+
+    final predicted =
+        _playbackAnchorMs + (nowMs - _playbackAnchorWallMs) * _playbackRate;
+    final delta = clampedObserved - predicted;
+    if (delta.abs() <= _anchorDeadZoneMs) {
+      _resetPlaybackAnchor(predicted, nowMs);
+      return;
+    }
+    if (delta.abs() < _anchorModerateWindowMs) {
+      _resetPlaybackAnchor(predicted + delta * _anchorModerateGain, nowMs);
+      return;
+    }
+    if (delta.abs() < _anchorLargeWindowMs) {
+      _resetPlaybackAnchor(predicted + delta * _anchorLargeGain, nowMs);
+      return;
+    }
+    _resetPlaybackAnchor(clampedObserved, nowMs);
+  }
+
+  void _onPlaybackPulseTick() {
+    if (_playbackStatus != PlaybackStatus.playing) {
+      return;
+    }
+    if (!_playbackAnchorValid) {
+      _resetPlaybackAnchor(
+        _playheadMs.toDouble(),
+        _playbackClock.elapsedMilliseconds,
+      );
+    }
+    final nowMs = _playbackClock.elapsedMilliseconds;
+    var predicted =
+        _playbackAnchorMs + (nowMs - _playbackAnchorWallMs) * _playbackRate;
+    if (_durationMs > 0) {
+      predicted = predicted.clamp(0.0, _durationMs.toDouble());
+    } else {
+      predicted = max(0.0, predicted);
+    }
+    final predictedInt = predicted.round();
+    if (predictedInt < _lastPlaybackPulseMs) {
+      return;
+    }
+    if ((predictedInt - _lastPlaybackPulseMs).abs() <= 0) {
+      return;
+    }
+    _lastPlaybackPulseMs = predictedInt;
+    _playheadMs = predictedInt;
+    _playheadBeat = _msToBeat(_playheadMs);
+    notifyListeners();
   }
 
   void _rebuildBeatTimeMapper() {

@@ -127,7 +127,7 @@ void main() {
 
     fakeAudio.emitPosition(const Duration(milliseconds: 1600));
     await tester.pumpAndSettle();
-    expect(controller.playheadMs, 1600);
+    expect(controller.playheadMs, inInclusiveRange(1600, 1616));
 
     await tester.tap(find.widgetWithText(FilledButton, 'Stop'));
     await tester.pumpAndSettle();
@@ -136,57 +136,77 @@ void main() {
     root.deleteSync(recursive: true);
   });
 
-  testWidgets('density bar seek callback updates controller playhead', (
-    WidgetTester tester,
-  ) async {
-    await tester.binding.setSurfaceSize(const Size(1400, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  testWidgets(
+    'density bar preview does not seek until commit and pauses playback',
+    (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    final controller = ChartDocumentController(
-      sessionFactory: () => FakeCoreSession(),
-      audioFactory: () =>
-          FakeChartAudio(initialDuration: const Duration(seconds: 120)),
-    );
-    controller.openSession();
-    controller.addNormalNote(measure: 12, numerator: 0, denominator: 1, x: 200);
-    controller.updateMetadata(
-      controller.metadata.copyWith(
-        title: 'SeekUI',
-        audioFile: 'audio/song.ogg',
-      ),
-    );
-    final root = Directory.systemTemp.createTempSync('mobile_density_seek');
-    final chartPath = '${root.path}${Platform.pathSeparator}seek_case.mc';
-    controller.saveChart(path: chartPath);
-    final audioPath = File(
-      '${root.path}${Platform.pathSeparator}audio${Platform.pathSeparator}song.ogg',
-    );
-    audioPath.parent.createSync(recursive: true);
-    audioPath.writeAsStringSync('audio');
+      late FakeChartAudio fakeAudio;
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+        audioFactory: () {
+          fakeAudio = FakeChartAudio(
+            initialDuration: const Duration(seconds: 120),
+          );
+          return fakeAudio;
+        },
+      );
+      controller.openSession();
+      controller.addNormalNote(
+        measure: 12,
+        numerator: 0,
+        denominator: 1,
+        x: 200,
+      );
+      controller.updateMetadata(
+        controller.metadata.copyWith(
+          title: 'SeekUI',
+          audioFile: 'audio/song.ogg',
+        ),
+      );
+      final root = Directory.systemTemp.createTempSync('mobile_density_seek');
+      final chartPath = '${root.path}${Platform.pathSeparator}seek_case.mc';
+      controller.saveChart(path: chartPath);
+      final audioPath = File(
+        '${root.path}${Platform.pathSeparator}audio${Platform.pathSeparator}song.ogg',
+      );
+      audioPath.parent.createSync(recursive: true);
+      audioPath.writeAsStringSync('audio');
 
-    await tester.pumpWidget(
-      MalodyCatchMobileApp(
-        controller: controller,
-        runStartupSelfCheckOnInit: false,
-        forceStartupReady: true,
-      ),
-    );
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MalodyCatchMobileApp(
+          controller: controller,
+          runStartupSelfCheckOnInit: false,
+          forceStartupReady: true,
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Play'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Play'));
+      await tester.pumpAndSettle();
 
-    final density = find.byType(SimpleDensityBar);
-    expect(density, findsOneWidget);
-    final densityWidget = tester.widget<SimpleDensityBar>(density);
-    densityWidget.onSeekBeat(12.0);
-    await tester.pumpAndSettle();
+      final density = find.byType(SimpleDensityBar);
+      expect(density, findsOneWidget);
+      final densityWidget = tester.widget<SimpleDensityBar>(density);
+      densityWidget.onSeekGestureStart?.call();
+      await tester.pumpAndSettle();
+      densityWidget.onSeekPreviewBeat(12.0);
+      await tester.pumpAndSettle();
 
-    expect(controller.playheadMs, greaterThan(0));
-    expect(controller.playheadBeat, greaterThan(0));
+      expect(fakeAudio.seekCallCount, 0);
+      expect(controller.playbackStatus, PlaybackStatus.paused);
 
-    root.deleteSync(recursive: true);
-  });
+      densityWidget.onSeekCommitBeat(12.0);
+      await tester.pumpAndSettle();
+
+      expect(fakeAudio.seekCallCount, 1);
+      expect(controller.playheadMs, greaterThan(0));
+      expect(controller.playheadBeat, greaterThan(0));
+
+      root.deleteSync(recursive: true);
+    },
+  );
 
   testWidgets('playback missing audio shows error text', (
     WidgetTester tester,

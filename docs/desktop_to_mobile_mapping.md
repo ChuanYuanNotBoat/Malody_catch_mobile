@@ -1,6 +1,6 @@
-# Desktop to Mobile Mapping
+﻿# Desktop to Mobile Mapping
 
-Reference baseline: `Malody_catch_editor@2f60ae6` (`desktop main`, `2026-05-05`)
+Reference baseline: `Malody_catch_editor@f3088da` (`desktop main`, `2026-05-09`)
 
 ## Mode and Panel Mapping
 
@@ -33,3 +33,4 @@ Reference baseline: `Malody_catch_editor@2f60ae6` (`desktop main`, `2026-05-05`)
   - action category
   - concrete action
   - confirmation (if destructive)
+

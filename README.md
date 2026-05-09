@@ -1,4 +1,4 @@
-# Malody Catch Mobile
+﻿# Malody Catch Mobile
 
 Flutter Android client for the Malody Catch editor migration.
 
@@ -8,8 +8,8 @@ chart-editing behavior is expected to come from the sibling
 
 ## Desktop Sync Baseline
 
-- Synced desktop editor release target: `desktop main` (`2026-05-05`)
-- Source commit from sibling repo `Malody_catch_editor`: `2f60ae6`
+- Synced desktop editor release target: `desktop main` (`2026-05-09`)
+- Source commit from sibling repo `Malody_catch_editor`: `f3088da`
 - Mobile startup path currently validates core ABI compatibility before enabling
   editing actions.
 
@@ -35,14 +35,14 @@ chart-editing behavior is expected to come from the sibling
 ## Desktop Parity Scope (Feature / GUI / Interaction)
 
 - Reference desktop baseline:
-  `Malody_catch_editor@2f60ae6` (`desktop main`, `2026-05-05`)
+  `Malody_catch_editor@f3088da` (`desktop main`, `2026-05-09`, sync scope: `2f60ae6..f3088da`)
 - Feature parity (current): edit loop, `.mc/.mcz` loop, playback loop.
 - GUI parity (current): desktop-like wide layout
   (tools/canvas/inspector + density bar) and compact mobile layout.
 - Interaction parity (current): tap place/select, drag move, box select,
   pinch zoom, long-press context menu, grid/time-division workflows.
 - Out of scope in this repo: desktop plugin system and desktop Qt panel stack.
-- Ongoing parity tracking lives in `TODO.md` (`MOB-M1-007/008/009`).
+- Ongoing parity tracking lives in `TODO.md` (`MOB-M1-007/008/009/M3-003`).
 
 ## Sync Native Library
 
@@ -111,3 +111,5 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+

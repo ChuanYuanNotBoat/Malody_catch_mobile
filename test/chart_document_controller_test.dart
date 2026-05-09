@@ -140,10 +140,15 @@ void main() {
     final nudged = controller.nudgeSelectedNotes(beatDelta: 0.5, xDelta: -16);
     expect(nudged, isTrue);
     expect(controller.notes.length, 2);
-    final beats = controller.notes
-        .map((note) => note.beat.measure + note.beat.numerator / note.beat.denominator)
-        .toList()
-      ..sort();
+    final beats =
+        controller.notes
+            .map(
+              (note) =>
+                  note.beat.measure +
+                  note.beat.numerator / note.beat.denominator,
+            )
+            .toList()
+          ..sort();
     expect(beats[0], closeTo(1.5, 0.001));
     expect(beats[1], closeTo(2.5, 0.001));
   });
@@ -305,6 +310,91 @@ void main() {
     },
   );
 
+  test(
+    'controller playback pulse advances playhead and stops on pause',
+    () async {
+      late FakeChartAudio fakeAudio;
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+        audioFactory: () {
+          fakeAudio = FakeChartAudio(
+            initialDuration: const Duration(seconds: 60),
+          );
+          return fakeAudio;
+        },
+      );
+
+      controller.openSession();
+      controller.updateMetadata(
+        controller.metadata.copyWith(
+          title: 'PulseCase',
+          audioFile: 'audio/song.ogg',
+        ),
+      );
+
+      final root = Directory.systemTemp.createTempSync('mobile_audio_pulse');
+      final chartPath = path.join(root.path, 'pulse_case.mc');
+      controller.saveChart(path: chartPath);
+      final audioPath = path.join(root.path, 'audio', 'song.ogg');
+      final audioFile = File(audioPath);
+      audioFile.parent.createSync(recursive: true);
+      audioFile.writeAsStringSync('audio-bytes');
+
+      expect(await controller.prepareAudioFromCurrentChart(), isTrue);
+      expect(await controller.play(), isTrue);
+      final startMs = controller.playheadMs;
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      final advancedMs = controller.playheadMs;
+      expect(advancedMs, greaterThan(startMs));
+
+      expect(await controller.pause(), isTrue);
+      final pausedMs = controller.playheadMs;
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(controller.playheadMs, pausedMs);
+      expect(fakeAudio.seekCallCount, 0);
+
+      root.deleteSync(recursive: true);
+    },
+  );
+
+  test(
+    'controller previewSeekBeat updates playhead without audio seek',
+    () async {
+      late FakeChartAudio fakeAudio;
+      final controller = ChartDocumentController(
+        sessionFactory: () => FakeCoreSession(),
+        audioFactory: () {
+          fakeAudio = FakeChartAudio(
+            initialDuration: const Duration(seconds: 90),
+          );
+          return fakeAudio;
+        },
+      );
+      controller.openSession();
+      controller.updateMetadata(
+        controller.metadata.copyWith(
+          title: 'PreviewCase',
+          audioFile: 'audio/song.ogg',
+        ),
+      );
+
+      final root = Directory.systemTemp.createTempSync('mobile_audio_preview');
+      final chartPath = path.join(root.path, 'preview_case.mc');
+      controller.saveChart(path: chartPath);
+      final audioPath = path.join(root.path, 'audio', 'song.ogg');
+      final audioFile = File(audioPath);
+      audioFile.parent.createSync(recursive: true);
+      audioFile.writeAsStringSync('audio-bytes');
+
+      expect(await controller.prepareAudioFromCurrentChart(), isTrue);
+      controller.previewSeekBeat(12.0);
+      expect(controller.playheadBeat, closeTo(12.0, 0.05));
+      expect(fakeAudio.seekCallCount, 0);
+
+      root.deleteSync(recursive: true);
+    },
+  );
+
   test('controller playback fails when audio source is missing', () async {
     FakeChartAudio? fakeAudio;
     final controller = ChartDocumentController(
@@ -385,7 +475,10 @@ void main() {
 
     controller.openSession();
     controller.updateMetadata(
-      controller.metadata.copyWith(title: 'Lifecycle', audioFile: 'audio/song.ogg'),
+      controller.metadata.copyWith(
+        title: 'Lifecycle',
+        audioFile: 'audio/song.ogg',
+      ),
     );
     final chartPath = path.join(root.path, 'lifecycle.mc');
     controller.saveChart(path: chartPath);
@@ -417,7 +510,9 @@ void main() {
       },
     );
 
-    final root = Directory.systemTemp.createTempSync('mobile_audio_manual_pause');
+    final root = Directory.systemTemp.createTempSync(
+      'mobile_audio_manual_pause',
+    );
     final audioPath = path.join(root.path, 'audio', 'song.ogg');
     final audioFile = File(audioPath);
     audioFile.parent.createSync(recursive: true);

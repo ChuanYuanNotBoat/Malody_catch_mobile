@@ -31,6 +31,9 @@ class FakeChartAudio implements ChartAudioPort {
   String? loadedPath;
   double currentRate = 1.0;
   bool disposed = false;
+  int playCallCount = 0;
+  int pauseCallCount = 0;
+  int seekCallCount = 0;
 
   @override
   Stream<Duration> get positionStream => _positionController.stream;
@@ -68,6 +71,7 @@ class FakeChartAudio implements ChartAudioPort {
     if (failOnPlay) {
       throw StateError('play_failed');
     }
+    playCallCount += 1;
     _state = ChartAudioPlaybackState.playing;
     _stateController.add(_state);
   }
@@ -77,6 +81,7 @@ class FakeChartAudio implements ChartAudioPort {
     if (failOnPause) {
       throw StateError('pause_failed');
     }
+    pauseCallCount += 1;
     _state = ChartAudioPlaybackState.paused;
     _stateController.add(_state);
   }
@@ -86,6 +91,7 @@ class FakeChartAudio implements ChartAudioPort {
     if (failOnSeek) {
       throw StateError('seek_failed');
     }
+    seekCallCount += 1;
     _position = position;
     _positionController.add(position);
   }

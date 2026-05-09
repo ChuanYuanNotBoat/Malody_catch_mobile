@@ -1,6 +1,6 @@
-# Desktop Operation Replay Checklist
+﻿# Desktop Operation Replay Checklist
 
-Reference baseline: `Malody_catch_editor@2f60ae6`
+Reference baseline: `Malody_catch_editor@f3088da`
 
 Run before release and record device model + Android version + date.
 
@@ -23,3 +23,4 @@ Run before release and record device model + Android version + date.
 - fail_count:
 - blocking_failures:
 - non_blocking_findings:
+
